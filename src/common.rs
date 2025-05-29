@@ -1,5 +1,5 @@
 use ark_poly::univariate::DensePolynomial;
-use num_bigint::BigUint;
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use serde::{Deserialize, Serialize};
 
 pub const PERM_SIZE: usize = 64;
@@ -9,11 +9,25 @@ pub const NUM_SAMPLES: usize = 420;
 pub const NUM_BEAVER_TRIPLES: usize = 3466;
 pub const NUM_RAND_SHARINGS: usize = 987;
 
+#[cfg(feature = "bls12_377")]
 pub type Curve = ark_bls12_377::Bls12_377;
+#[cfg(feature = "bls12_377")]
 pub type F = ark_bls12_377::Fr;
-pub type Gt = ark_ec::pairing::PairingOutput<Curve>;
+#[cfg(feature = "bls12_377")]
 pub type G1 = ark_bls12_377::G1Projective;
+#[cfg(feature = "bls12_377")]
 pub type G2 = ark_bls12_377::G2Projective;
+
+#[cfg(not(feature = "bls12_377"))]
+pub type Curve = ark_bls12_381::Bls12_381;
+#[cfg(not(feature = "bls12_377"))]
+pub type F = ark_bls12_381::Fr;
+#[cfg(not(feature = "bls12_377"))]
+pub type G1 = ark_bls12_381::G1Projective;
+#[cfg(not(feature = "bls12_377"))]
+pub type G2 = ark_bls12_381::G2Projective;
+
+pub type Gt = ark_ec::pairing::PairingOutput<Curve>;
 pub type KZG =
     crate::kzg::KZG10<Curve, DensePolynomial<<Curve as ark_ec::pairing::Pairing>::ScalarField>>;
 
@@ -41,6 +55,7 @@ pub enum EvalNetMsg {
 }
 
 /// PermutationProof is a structure for the permutation proofs
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct PermutationProof {
     pub y1: F,
     pub y2: F,
@@ -59,9 +74,10 @@ pub struct PermutationProof {
 
 pub type Ciphertext = (G2, Vec<Gt>);
 
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct EncryptionProof {
     pub pk: G2,
-    pub ids: Vec<BigUint>,
+    pub ids: Vec<Vec<u8>>,
     pub card_commitment: G1, //same as f_com above
     pub card_poly_eval: F,
     pub eval_proof: G1,
@@ -70,6 +86,7 @@ pub struct EncryptionProof {
     pub sigma_proof: Option<SigmaProof>,
 }
 
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct SigmaProof {
     pub a1: G2,
     pub a2: Gt,

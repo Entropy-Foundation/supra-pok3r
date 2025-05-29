@@ -2,7 +2,6 @@ use ark_ec::{pairing::Pairing, Group};
 use ark_poly::univariate::{DenseOrSparsePolynomial, DensePolynomial};
 use ark_poly::DenseUVPolynomial;
 use ark_std::{One, UniformRand, Zero};
-use num_bigint::BigUint;
 use rand::thread_rng;
 use rand::{rngs::StdRng, SeedableRng};
 use std::collections::HashMap;
@@ -15,6 +14,7 @@ use crate::encoding::{
     decode_bs58_str_as_f, decode_bs58_str_as_g1, decode_bs58_str_as_g2, decode_bs58_str_as_gt,
     encode_f_as_bs58_str, encode_g1_as_bs58_str, encode_g2_as_bs58_str, encode_gt_as_bs58_str,
 };
+use crate::hash::hash_to_g1;
 use crate::kzg::UniversalParams;
 use crate::network;
 use crate::shamir;
@@ -796,11 +796,9 @@ impl Evaluator {
         msg_share_handle: &String,  // [z1]
         mask_share_handle: &String, // [r]
         pk: &G2,
-        id: BigUint,
+        id: Vec<u8>,
     ) -> (G1, Gt) {
-        // TODO: fix this. Need proper hash to curve
-        let x_f = F::from(id);
-        let hash_id = G1::generator().mul(x_f);
+        let hash_id = hash_to_g1(&id);
 
         let h = <Curve as Pairing>::pairing(hash_id, pk);
 
@@ -829,16 +827,13 @@ impl Evaluator {
         msg_share_handles: &[String], // [z1]
         mask_share_handle: &String,   // [r]
         pk: &G2,
-        ids: &[BigUint],
+        ids: &[Vec<u8>],
     ) -> (G2, Vec<Gt>) {
         // Compute e_i^r
         let e_is = ids
             .iter()
             .map(|id| {
-                let x_f = F::from(id.clone());
-                let hash_id_pow_r = G1::generator()
-                    .mul(x_f)
-                    .mul(self.get_wire(mask_share_handle));
+                let hash_id_pow_r = hash_to_g1(&id.as_ref()) * self.get_wire(&mask_share_handle);
 
                 <Curve as Pairing>::pairing(hash_id_pow_r, pk)
             })

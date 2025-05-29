@@ -19,7 +19,7 @@ pub struct KZG10<E: Pairing, P: DenseUVPolynomial<E::ScalarField>> {
     _poly: PhantomData<P>,
 }
 
-#[derive(CanonicalDeserialize, CanonicalSerialize, PartialEq, Debug)]
+#[derive(CanonicalDeserialize, CanonicalSerialize, PartialEq, Debug, Clone)]
 pub struct UniversalParams<E: Pairing> {
     /// Group elements of the form `{ \beta^i G }`, where `i` ranges from 0 to `degree`.
     pub powers_of_g: Vec<E::G1Affine>,

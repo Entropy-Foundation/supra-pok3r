@@ -2,6 +2,7 @@ pub mod address_book;
 pub mod common;
 pub mod encoding;
 pub mod evaluator;
+pub mod hash;
 pub mod kzg;
 pub mod network;
 pub mod shamir;

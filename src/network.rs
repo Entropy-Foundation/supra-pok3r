@@ -37,12 +37,23 @@ pub async fn run_networking_daemon(
     secret_key_seed: u8,
     addr_book: &Pok3rAddrBook,
     tx: &mut mpsc::UnboundedSender<EvalNetMsg>,
+    rx: mpsc::UnboundedReceiver<EvalNetMsg>,
+) -> Result<(), Box<dyn Error>> {
+    run_networking_daemon_with_kill(secret_key_seed, addr_book, tx, rx, None).await
+}
+
+pub async fn run_networking_daemon_with_kill(
+    secret_key_seed: u8,
+    addr_book: &Pok3rAddrBook,
+    tx: &mut mpsc::UnboundedSender<EvalNetMsg>,
     mut rx: mpsc::UnboundedReceiver<EvalNetMsg>,
+    mut rx_kill: Option<mpsc::UnboundedReceiver<()>>,
 ) -> Result<(), Box<dyn Error>> {
     // Create a random PeerId
     //let id_keys = identity::Keypair::generate_ed25519();
     let id_keys: identity::Keypair = generate_ed25519(secret_key_seed);
     let local_peer_id = PeerId::from(id_keys.public());
+    #[cfg(feature = "print")]
     println!("Local peer id: {local_peer_id}");
 
     // Set up an encrypted DNS-enabled TCP Transport over the yamux protocol.
@@ -105,7 +116,24 @@ pub async fn run_networking_daemon(
     let mut connected_peers: Vec<PeerId> = vec![];
     let mut connection_informed: bool = false;
     // Kick it off
-    loop {
+    let mut is_killed = false;
+    while !is_killed {
+        is_killed = match rx_kill.as_mut() {
+            Some(recv_kill) => match recv_kill.try_next() {
+                Ok(Some(())) => {
+                    #[cfg(feature = "print")]
+                    println!("kill message received");
+                    true
+                }
+                Ok(None) => {
+                    #[cfg(feature = "print")]
+                    println!("manager disconnected");
+                    true
+                }
+                Err(_) => false,
+            },
+            None => false,
+        };
         select! {
             //receives requests for publishing messages from the evaluator
             msg_to_send = rx.select_next_some() => {
@@ -120,6 +148,7 @@ pub async fn run_networking_daemon(
             event = swarm.select_next_some() => match event {
                 SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                     for (peer_id, _multiaddr) in list {
+                        #[cfg(feature = "print")]
                         println!("mDNS discovered a new peer: {peer_id}");
                         let peer_id_encoded = peer_id.to_base58();
                         swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
@@ -161,13 +190,16 @@ pub async fn run_networking_daemon(
                     }
                 },
                 //prints out the address this program is listening on for new connections
+                #[allow(unused_variables)]
                 SwarmEvent::NewListenAddr { address, .. } => {
+                    #[cfg(feature = "print")]
                     println!("Local node is listening on {address}");
                 }
                 _ => {}
             }
         }
     }
+    Ok(())
 }
 
 pub struct MessagingSystem {
@@ -199,6 +231,7 @@ impl MessagingSystem {
             match msg {
                 EvalNetMsg::ConnectionEstablished { success } => {
                     if success {
+                        #[cfg(feature = "print")]
                         println!("evaluator connected to the network");
                         break;
                     }

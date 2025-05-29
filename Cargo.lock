@@ -127,6 +127,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ark-bls12-381"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c775f0d12169cba7aae4caeb547bb6a50781c7449a8aa53793827c9ec4abf488"
+dependencies = [
+ "ark-ec",
+ "ark-ff",
+ "ark-serialize",
+ "ark-std",
+]
+
+[[package]]
 name = "ark-crypto-primitives"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2748,6 +2760,7 @@ name = "pok3r"
 version = "0.0.1"
 dependencies = [
  "ark-bls12-377",
+ "ark-bls12-381",
  "ark-crypto-primitives",
  "ark-ec",
  "ark-ff",

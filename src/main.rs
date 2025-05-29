@@ -76,8 +76,8 @@ async fn main() {
 
     // Get random ids as byte strings
     let ids = (0..PERM_SIZE)
-        .map(|i| BigUint::from(i as u64))
-        .collect::<Vec<BigUint>>();
+        .map(|i| BigUint::from(i as u64).to_bytes_le())
+        .collect::<Vec<Vec<u8>>>();
 
     // Encrypt and prove
     let (ctxt, encryption_proof) = encrypt_and_prove(

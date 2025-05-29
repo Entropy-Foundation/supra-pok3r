@@ -2,7 +2,7 @@ ps aux | grep pok3r | grep -v grep | awk '{print "kill -9 " $2}' | sh
 rm -f /tmp/pok3r/*
 mkdir -p /tmp/pok3r
 
-cargo b -r
+cargo b -r --features "print"
 
 # CHANGE THIS
 n=4

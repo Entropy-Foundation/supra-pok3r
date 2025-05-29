@@ -19,6 +19,7 @@ use crate::common::{
     NUM_SAMPLES, PERM_SIZE,
 };
 use crate::evaluator::Evaluator;
+use crate::hash::hash_to_g1;
 use crate::kzg::{UniversalParams, KZG10};
 use crate::utils;
 
@@ -36,8 +37,8 @@ pub fn compute_keyper_keys() -> (F, G2) {
     (msk, mpk)
 }
 
-pub fn compute_decryption_key(card_id: &BigUint, msk: F) -> G1 {
-    let hash_id = G1::generator().mul(F::from(card_id.clone()));
+pub fn compute_decryption_key(card_id: &[u8], msk: F) -> G1 {
+    let hash_id = hash_to_g1(card_id);
 
     hash_id * msk
 }
@@ -641,7 +642,7 @@ pub async fn encrypt_and_prove(
     card_commitment: G1, // C = g^{\sum_i card_handles_i L_i(x) + alpha1 * (x^PERM_SIZE - 1)}
     alpha1: String,
     pk: G2,
-    ids: Vec<BigUint>,
+    ids: Vec<Vec<u8>>,
 ) -> (Ciphertext, EncryptionProof) {
     // Get all cards from card handles
     let mut cards = vec![];
@@ -660,7 +661,7 @@ pub async fn encrypt_and_prove(
     // Encrypt an extra "card" with alpha1
     // This id can be anything (different from the others), it will never be opened.
     let (_, alpha1_c2) = evaluator
-        .dist_ibe_encrypt(&alpha1, &r, &pk, BigUint::from(123_u64))
+        .dist_ibe_encrypt(&alpha1, &r, &pk, BigUint::from(123_u64).to_bytes_le())
         .await;
 
     // Hash all the encryptions to get randomness for batching
@@ -725,14 +726,11 @@ pub async fn encrypt_and_prove(
     // Computing E = prod_i e_i^Li(delta)
     let mut batch_h = G1::zero();
     for i in 0..PERM_SIZE {
-        // TODO: fix this. Need proper hash to curve
-        let x_f = F::from(ids[i].clone());
-        let hash_id = G1::generator().mul(x_f);
+        let hash_id = hash_to_g1(ids[i].as_ref());
         batch_h = batch_h.add(hash_id.mul(lagrange_delta[i]));
     }
     // Add the contribution from the hiding term (multiplied with (delta^PERM_SIZE - 1))
-    let x_f = F::from(BigUint::from(123_u64));
-    let hash_id = G1::generator().mul(x_f);
+    let hash_id = hash_to_g1(&BigUint::from(123_u64).to_bytes_le());
     batch_h = batch_h.add(hash_id.mul(utils::compute_power(&delta, PERM_SIZE as u64) - F::from(1)));
 
     let e_batch = <Curve as Pairing>::pairing(batch_h, pk);
@@ -848,14 +846,11 @@ pub fn verify_encryption_argument(
 
     let mut batch_h = G1::zero();
     for i in 0..PERM_SIZE {
-        // TODO: fix this. Need proper hash to curve
-        let x_f = F::from(proof.ids[i].clone());
-        let hash_id = G1::generator().mul(x_f);
+        let hash_id = hash_to_g1(proof.ids[i].as_ref());
         batch_h = batch_h.add(hash_id.mul(lagrange_delta[i]));
     }
     // Add the contribution from the hiding term (multiplied with (delta^PERM_SIZE - 1))
-    let x_f = F::from(BigUint::from(123_u64));
-    let hash_id = G1::generator().mul(x_f);
+    let hash_id = hash_to_g1(&BigUint::from(123_u64).to_bytes_le());
     batch_h = batch_h.add(hash_id.mul(utils::compute_power(&delta, PERM_SIZE as u64) - F::from(1)));
 
     let e_batch = <Curve as Pairing>::pairing(batch_h, proof.pk);
