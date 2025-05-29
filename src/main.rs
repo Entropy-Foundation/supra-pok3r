@@ -1,25 +1,28 @@
-use std::{thread, collections::*};
 use async_std::task;
-use futures::channel::*;
 use clap::Parser;
+use futures::channel::mpsc;
 use num_bigint::BigUint;
 use serde_json::json;
+use std::{collections::HashMap, thread};
 
-mod network;
-mod evaluator;
 mod address_book;
 mod common;
-mod utils;
-mod kzg;
 mod encoding;
-mod shuffler;
+mod evaluator;
+mod kzg;
+mod network;
 mod shamir;
+mod shuffler;
+mod utils;
 
-use address_book::*;
-use evaluator::*;
-use common::*;
-use shuffler::*;
-
+use address_book::{Pok3rAddrBook, Pok3rPeer};
+use common::{EvalNetMsg, DECK_SIZE, PERM_SIZE};
+use evaluator::Evaluator;
+use shuffler::{
+    compute_decryption_cache, compute_decryption_key, compute_keyper_keys, compute_params,
+    compute_permutation_argument, decrypt_one_card, encrypt_and_prove, shuffle_deck,
+    verify_encryption_argument, verify_permutation_argument,
+};
 
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
@@ -172,18 +175,17 @@ async fn main() {
     let (e2n_tx, e2n_rx) = mpsc::unbounded::<EvalNetMsg>();
 
     let netd_handle = thread::spawn(move || {
-        let result = task::block_on(
-            network::run_networking_daemon(
-                args.seed, 
-                &parse_addr_book_from_json(args.parties), 
-                &mut n2e_tx,
-                e2n_rx)
-        );
+        let result = task::block_on(network::run_networking_daemon(
+            args.seed,
+            &parse_addr_book_from_json(args.parties),
+            &mut n2e_tx,
+            e2n_rx,
+        ));
         if let Err(err) = result {
             eprint!("Networking error {:?}", err);
         }
     });
-    
+
     let addr_book = parse_addr_book_from_json(args.parties);
     let messaging = network::MessagingSystem::new(&args.id, addr_book, e2n_tx, n2e_rx).await;
     let mut mpc = Evaluator::new(messaging).await;
@@ -204,29 +206,26 @@ async fn main() {
     // Actual protocol
     let card_share_handles = shuffle_deck(&mut mpc).await;
     println!("Generated a deck of {} cards", card_share_handles.len());
-    
-    let (perm_proof, alpha1) = compute_permutation_argument(
-        &pp, 
-        &mut mpc, 
-        &card_share_handles,
-    ).await;
+
+    let (perm_proof, alpha1) =
+        compute_permutation_argument(&pp, &mut mpc, &card_share_handles).await;
 
     // Get random ids as byte strings
     let ids = (0..PERM_SIZE)
-        .into_iter()
         .map(|i| BigUint::from(i as u64))
         .collect::<Vec<BigUint>>();
 
     // Encrypt and prove
     let (ctxt, encryption_proof) = encrypt_and_prove(
-        &pp, 
-        &mut mpc, 
-        card_share_handles.clone(), 
-        perm_proof.f_com, 
+        &pp,
+        &mut mpc,
+        card_share_handles.clone(),
+        perm_proof.f_com,
         alpha1,
         mpk,
-        ids.clone()
-    ).await;
+        ids.clone(),
+    )
+    .await;
 
     // decrypt all cards
     let cache = compute_decryption_cache();
@@ -241,16 +240,25 @@ async fn main() {
             print!("{},", card);
         }
     }
-    
-    assert!(verify_permutation_argument(&pp, &perm_proof), "Permutation argument verification failed");
-    assert!(verify_encryption_argument(&pp, &ctxt, &encryption_proof), "Encryption proof verification failed");
+
+    assert!(
+        verify_permutation_argument(&pp, &perm_proof),
+        "Permutation argument verification failed"
+    );
+    assert!(
+        verify_encryption_argument(&pp, &ctxt, &encryption_proof),
+        "Encryption proof verification failed"
+    );
 
     // we can verify the proof, but let's also do a sanity check
     // check that decrypted cards is a permutation of 0..51
     let mut sorted_cards = decrypted_cards.clone();
     sorted_cards.sort_unstable();
     let expected_cards: Vec<usize> = (0..DECK_SIZE).collect();
-    assert_eq!(sorted_cards, expected_cards, "Decrypted cards are not a valid permutation of 0..51");
+    assert_eq!(
+        sorted_cards, expected_cards,
+        "Decrypted cards are not a valid permutation of 0..51"
+    );
     println!("\ncompleted.");
 
     netd_handle.join().unwrap();

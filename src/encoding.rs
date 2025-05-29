@@ -1,7 +1,7 @@
-use ark_serialize::{CanonicalSerialize, CanonicalDeserialize};
+use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::io::Cursor;
 
-use crate::common::*;
+use crate::common::{Gt, F, G1, G2};
 
 pub fn encode_f_as_bs58_str(value: &F) -> String {
     let mut buffer: Vec<u8> = Vec::new();

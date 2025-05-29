@@ -1,6 +1,6 @@
-use num_bigint::BigUint;
-use serde::{Serialize, Deserialize};
 use ark_poly::univariate::DensePolynomial;
+use num_bigint::BigUint;
+use serde::{Deserialize, Serialize};
 
 pub const PERM_SIZE: usize = 64;
 pub const DECK_SIZE: usize = 52;
@@ -14,24 +14,29 @@ pub type F = ark_bls12_377::Fr;
 pub type Gt = ark_ec::pairing::PairingOutput<Curve>;
 pub type G1 = ark_bls12_377::G1Projective;
 pub type G2 = ark_bls12_377::G2Projective;
-pub type KZG = crate::kzg::KZG10::<Curve, DensePolynomial<<Curve as ark_ec::pairing::Pairing>::ScalarField>>;
+pub type KZG =
+    crate::kzg::KZG10<Curve, DensePolynomial<<Curve as ark_ec::pairing::Pairing>::ScalarField>>;
 
 /// EvalNetMsg represents the types of messages that
 /// we expect to flow between the evaluator and networkd
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum EvalNetMsg {
-    ConnectionEstablished { success: bool },
-    Greeting { message: String },
-    PublishValue { 
+    ConnectionEstablished {
+        success: bool,
+    },
+    Greeting {
+        message: String,
+    },
+    PublishValue {
         sender: String,
         handle: String,
-        value: String
+        value: String,
     },
-    PublishBatchValue { 
+    PublishBatchValue {
         sender: String,
         handles: Vec<String>,
-        values: Vec<String>
+        values: Vec<String>,
     },
 }
 
@@ -52,7 +57,7 @@ pub struct PermutationProof {
     pub t_com: G1,
 }
 
-pub type Ciphertext = (G2,Vec<Gt>);
+pub type Ciphertext = (G2, Vec<Gt>);
 
 pub struct EncryptionProof {
     pub pk: G2,

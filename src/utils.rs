@@ -1,37 +1,15 @@
 #![allow(dead_code)]
-#![allow(unused_imports)]
 
-use std::collections::HashMap;
-
-use ark_bls12_377::{G1Projective as G1, G2Projective as G2};
 use ark_crypto_primitives::crh::sha256::Sha256;
-use rand::{rngs::StdRng, SeedableRng};
-use ark_ff::{Field, FftField, PrimeField};
-use ark_std::{UniformRand, test_rng, ops::*};
+use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
+use ark_ff::Field;
 use ark_poly::{
-    Polynomial,
-    univariate::DensePolynomial, 
-    EvaluationDomain, 
-    Radix2EvaluationDomain,
-    Evaluations, GeneralEvaluationDomain, domain
+    univariate::DensePolynomial, EvaluationDomain, Evaluations, GeneralEvaluationDomain,
+    Polynomial, Radix2EvaluationDomain,
 };
-use ark_ec::{pairing::Pairing, CurveGroup};
-use ark_serialize::*;
-use ark_ec::{
-    hashing::{
-        curve_maps::wb::WBMap, map_to_curve_hasher::MapToCurveBasedHasher, HashToCurve,
-    },
-    short_weierstrass::{Affine, Projective},
-};
-use ark_ff::{
-    field_hashers::{DefaultFieldHasher, HashToField},
-    One, Zero,
-};
-use num_bigint::{BigInt, BigUint, Sign};
+use ark_std::{ops::Sub, UniformRand};
 
-use crate::kzg::UniversalParams;
-use crate::common::*;
-
+use crate::common::F;
 
 macro_rules! requires_power_of_2 {
     ($x:expr) => {
@@ -62,7 +40,7 @@ pub fn compute_lagrange_basis(i: u64, n: u64) -> DensePolynomial<F> {
 /// returns t(X) = X^n - 1
 pub fn compute_vanishing_poly(n: usize) -> DensePolynomial<F> {
     let mut coeffs = vec![];
-    for i in 0..n+1 {
+    for i in 0..n + 1 {
         if i == 0 {
             coeffs.push(F::from(0) - F::from(1)); // -1
         } else if i == n {
@@ -113,32 +91,34 @@ pub fn compute_power(x: &F, n: u64) -> F {
 
 pub fn fs_hash(x: Vec<&[u8]>, num_output: usize) -> Vec<F> {
     let hasher = <DefaultFieldHasher<Sha256> as HashToField<F>>::new(b"pok3r");
-    let field_elements = hasher.hash_to_field(&x.concat(), num_output);
 
-    field_elements
+    hasher.hash_to_field(&x.concat(), num_output)
 }
 
 //computes f(x/ω)
 pub fn poly_domain_div_ω(f: &DensePolynomial<F>, ω: &F) -> DensePolynomial<F> {
     let mut new_poly = f.clone();
-    for i in 1..(f.degree() + 1) { //we don't touch the zeroth coefficient
+    for i in 1..(f.degree() + 1) {
+        //we don't touch the zeroth coefficient
         let ω_pow_i: F = ω.pow([i as u64]);
-        new_poly.coeffs[i] = new_poly.coeffs[i] / ω_pow_i;
+        new_poly.coeffs[i] /= ω_pow_i;
     }
     new_poly
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::multiplicative_subgroup_of_size;
+    use crate::common::F;
+    use ark_ff::Field;
 
     #[test]
     fn test_multiplicative_subgroup_of_size() {
         let n: u64 = 64;
         let ω = multiplicative_subgroup_of_size(n);
-        
+
         //check if ω^n = 1
-        let ω_pow_n_minus_1 = ω.pow([n-1]);
+        let ω_pow_n_minus_1 = ω.pow([n - 1]);
         let ω_pow_n = ω.pow([n]);
         let one = F::from(1);
         assert_eq!(ω_pow_n, ω_pow_n_minus_1 * ω);

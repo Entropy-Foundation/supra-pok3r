@@ -1,13 +1,16 @@
 //adapted from https://github.com/arkworks-rs/poly-commit/blob/master/src/kzg10/mod.rs
 #![allow(dead_code)]
-#![allow(unused_imports)]
 
-use ark_ec::{pairing::Pairing, CurveGroup, AffineRepr};
+use ark_ec::{pairing::Pairing, AffineRepr, CurveGroup};
 use ark_ec::{scalar_mul::fixed_base::FixedBase, VariableBaseMSM};
 use ark_ff::{One, PrimeField, UniformRand, Zero};
 use ark_poly::DenseUVPolynomial;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use ark_std::{format, marker::PhantomData, ops::*, vec};
+use ark_std::{
+    marker::PhantomData,
+    ops::{Div, Mul, Sub},
+    vec,
+};
 
 use ark_std::rand::RngCore;
 
@@ -58,12 +61,10 @@ where
         let powers_of_g = E::G1::normalize_batch(&powers_of_g);
         let powers_of_h = E::G2::normalize_batch(&powers_of_h);
 
-        let pp = UniversalParams {
+        UniversalParams {
             powers_of_g,
             powers_of_h,
-        };
-
-        pp
+        }
     }
 
     pub fn verify_opening_proof(
@@ -90,10 +91,11 @@ where
         let d = polynomial.degree();
 
         let plain_coeffs: Vec<<<E as Pairing>::ScalarField as PrimeField>::BigInt> =
-            convert_to_bigints(&polynomial.coeffs());
+            convert_to_bigints(polynomial.coeffs());
 
         let powers_of_g = &params.powers_of_g[..=d].to_vec();
-        let commitment = <E::G1 as VariableBaseMSM>::msm_bigint(&powers_of_g[..], plain_coeffs.as_slice());
+        let commitment =
+            <E::G1 as VariableBaseMSM>::msm_bigint(&powers_of_g[..], plain_coeffs.as_slice());
         commitment.into_affine()
     }
 
@@ -101,10 +103,11 @@ where
         let d = polynomial.degree();
 
         let plain_coeffs: Vec<<<E as Pairing>::ScalarField as PrimeField>::BigInt> =
-            convert_to_bigints(&polynomial.coeffs());
+            convert_to_bigints(polynomial.coeffs());
 
         let powers_of_h = &params.powers_of_h[..=d].to_vec();
-        let commitment = <E::G2 as VariableBaseMSM>::msm_bigint(&powers_of_h[..], plain_coeffs.as_slice());
+        let commitment =
+            <E::G2 as VariableBaseMSM>::msm_bigint(&powers_of_h[..], plain_coeffs.as_slice());
 
         commitment.into_affine()
     }
@@ -137,9 +140,6 @@ fn skip_leading_zeros_and_convert_to_bigints<F: PrimeField, P: DenseUVPolynomial
 }
 
 fn convert_to_bigints<F: PrimeField>(p: &[F]) -> Vec<F::BigInt> {
-    let coeffs = p
-        .into_iter()
-        .map(|s| s.into_bigint())
-        .collect::<Vec<_>>();
+    let coeffs = p.iter().map(|s| s.into_bigint()).collect::<Vec<_>>();
     coeffs
 }

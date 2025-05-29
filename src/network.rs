@@ -1,9 +1,9 @@
-use futures::{future::Either, prelude::*, select, channel::*};
+use futures::{channel::mpsc, future::Either, select, SinkExt, StreamExt};
 use libp2p::{
     core::{muxing::StreamMuxerBox, transport::OrTransport, upgrade},
     gossipsub, identity, mdns, noise,
-    swarm::{NetworkBehaviour, SwarmBuilder, SwarmEvent},
-    tcp, yamux, PeerId, Transport,
+    swarm::{NetworkBehaviour, SwarmEvent},
+    tcp, yamux, PeerId, SwarmBuilder, Transport,
 };
 use libp2p_quic as quic;
 use std::collections::{hash_map::DefaultHasher, HashMap};
@@ -11,8 +11,10 @@ use std::error::Error;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
-use crate::address_book::*;
-use crate::common::*;
+use crate::{
+    address_book::{get_node_id_via_peer_id, Pok3rAddrBook, Pok3rPeerId},
+    common::EvalNetMsg,
+};
 
 // We create a custom network behaviour that combines Gossipsub and Mdns.
 #[derive(NetworkBehaviour)]
@@ -23,7 +25,7 @@ struct MyBehaviour {
 
 fn generate_ed25519(secret_key_seed: u8) -> identity::Keypair {
     // for now we are using a single byte as the seed
-    // this is not secure obviously, 
+    // this is not secure obviously,
     // but we are not using it to make life easy
     let mut bytes = [0u8; 32];
     bytes[0] = secret_key_seed;
@@ -34,8 +36,9 @@ fn generate_ed25519(secret_key_seed: u8) -> identity::Keypair {
 pub async fn run_networking_daemon(
     secret_key_seed: u8,
     addr_book: &Pok3rAddrBook,
-    tx: &mut mpsc::UnboundedSender<EvalNetMsg>, 
-    mut rx: mpsc::UnboundedReceiver<EvalNetMsg>) -> Result<(), Box<dyn Error>> {
+    tx: &mut mpsc::UnboundedSender<EvalNetMsg>,
+    mut rx: mpsc::UnboundedReceiver<EvalNetMsg>,
+) -> Result<(), Box<dyn Error>> {
     // Create a random PeerId
     //let id_keys = identity::Keypair::generate_ed25519();
     let id_keys: identity::Keypair = generate_ed25519(secret_key_seed);
@@ -84,11 +87,13 @@ pub async fn run_networking_daemon(
     gossipsub.subscribe(&topic)?;
 
     // Create a Swarm to manage peers and events
-    let mut swarm = {
-        let mdns = mdns::async_io::Behaviour::new(mdns::Config::default(), local_peer_id)?;
-        let behaviour = MyBehaviour { gossipsub, mdns };
-        SwarmBuilder::with_async_std_executor(transport, behaviour, local_peer_id).build()
-    };
+    let mdns = mdns::async_io::Behaviour::new(mdns::Config::default(), local_peer_id)?;
+    let behaviour = MyBehaviour { gossipsub, mdns };
+    let mut swarm = SwarmBuilder::with_new_identity()
+        .with_async_std()
+        .with_other_transport(|_| transport)?
+        .with_behaviour(|_| behaviour)?
+        .build();
 
     // Read full lines from stdin
     //let mut stdin = io::BufReader::new(io::stdin()).lines().fuse();
@@ -118,11 +123,11 @@ pub async fn run_networking_daemon(
                         println!("mDNS discovered a new peer: {peer_id}");
                         let peer_id_encoded = peer_id.to_base58();
                         swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
-                        
-                        if addr_book.contains_key(&peer_id_encoded) { 
-                            connected_peers.push(peer_id.clone());
 
-                            if !connection_informed && 
+                        if addr_book.contains_key(&peer_id_encoded) {
+                            connected_peers.push(peer_id);
+
+                            if !connection_informed &&
                                 (connected_peers.len() == addr_book.len() - 1) {
                                 let _r = tx.send(
                                     EvalNetMsg::ConnectionEstablished { success: true }
@@ -147,7 +152,7 @@ pub async fn run_networking_daemon(
                     propagation_source: _peer_id,
                     message_id: _id,
                     message,
-                })) => { 
+                })) => {
                     let msg_as_str = String::from_utf8_lossy(&message.data);
                     let deserialized_struct = serde_json::from_str(&msg_as_str).unwrap();
                     let r = tx.send(deserialized_struct).await;
@@ -183,7 +188,7 @@ impl MessagingSystem {
         id: &Pok3rPeerId,
         addr_book: Pok3rAddrBook,
         tx: mpsc::UnboundedSender<EvalNetMsg>,
-        mut rx: mpsc::UnboundedReceiver<EvalNetMsg>
+        mut rx: mpsc::UnboundedReceiver<EvalNetMsg>,
     ) -> Self {
         // we expect the first message from the
         // networkd to be a connection established;
@@ -197,7 +202,7 @@ impl MessagingSystem {
                         println!("evaluator connected to the network");
                         break;
                     }
-                },
+                }
                 _ => continue,
             }
         }
@@ -207,7 +212,7 @@ impl MessagingSystem {
             addr_book,
             rx,
             tx,
-            mailbox : HashMap::new()
+            mailbox: HashMap::new(),
         }
     }
 
@@ -220,19 +225,19 @@ impl MessagingSystem {
         handles: impl AsRef<[String]>,
         values: impl AsRef<[String]>,
     ) {
-        assert!(handles.as_ref().len() == values.as_ref().len() && handles.as_ref().len() > 0);
+        assert!(handles.as_ref().len() == values.as_ref().len() && !handles.as_ref().is_empty());
 
         let msg = if handles.as_ref().len() > 1 {
             EvalNetMsg::PublishBatchValue {
                 sender: self.id.clone(),
                 handles: handles.as_ref().to_owned(),
-                values: values.as_ref().to_owned()
+                values: values.as_ref().to_owned(),
             }
         } else {
             EvalNetMsg::PublishValue {
                 sender: self.id.clone(),
                 handle: handles.as_ref()[0].clone(),
-                value: values.as_ref()[0].clone()
+                value: values.as_ref()[0].clone(),
             }
         };
         let r = self.tx.send(msg).await;
@@ -241,23 +246,23 @@ impl MessagingSystem {
         }
     }
 
-    pub async fn recv_from_all(
-        &mut self,
-        identifier: &String
-    ) -> HashMap<u64, String> {
+    pub async fn recv_from_all(&mut self, identifier: &String) -> HashMap<u64, String> {
         let mut messages: HashMap<u64, String> = HashMap::new();
         let peers: Vec<Pok3rPeerId> = self.addr_book.keys().cloned().collect();
         for peer_id in peers {
-            if self.id.eq(&peer_id) { continue; } // ignore self
+            if self.id.eq(&peer_id) {
+                continue;
+            } // ignore self
 
-            loop { //loop over all incoming messages till we find msg from peer
+            loop {
+                //loop over all incoming messages till we find msg from peer
                 if self.mailbox.contains_key(identifier) {
-                    let sender_exists_for_handle = self.mailbox
-                        .get(identifier)
-                        .unwrap()
-                        .contains_key(&peer_id);
-                     //if we already have it, break out!
-                    if sender_exists_for_handle { break; }
+                    let sender_exists_for_handle =
+                        self.mailbox.get(identifier).unwrap().contains_key(&peer_id);
+                    //if we already have it, break out!
+                    if sender_exists_for_handle {
+                        break;
+                    }
                 }
 
                 let msg: EvalNetMsg = self.rx.select_next_some().await;
@@ -265,7 +270,8 @@ impl MessagingSystem {
             }
 
             // if we got here, we can assume we have the message from peer_id
-            let msg = self.mailbox
+            let msg = self
+                .mailbox
                 .get(identifier)
                 .unwrap()
                 .get(&peer_id)
@@ -282,43 +288,43 @@ impl MessagingSystem {
         messages
     }
 
-    //returns the handle which 
+    //returns the handle which
     fn process_next_message(&mut self, msg: &EvalNetMsg) {
         match msg {
             EvalNetMsg::PublishValue {
                 sender,
                 handle,
-                value
+                value,
             } => {
                 self.accept_handle_and_value_from_sender(sender, handle, value);
-            },
+            }
             EvalNetMsg::PublishBatchValue {
                 sender,
                 handles,
-                values
+                values,
             } => {
                 assert_eq!(handles.len(), values.len());
 
-                for (h,v) in handles.iter().zip(values.iter()) {
+                for (h, v) in handles.iter().zip(values.iter()) {
                     self.accept_handle_and_value_from_sender(sender, h, v);
                 }
-            },
-            _ => return,
+            }
+            _ => (),
         }
     }
 
-    fn accept_handle_and_value_from_sender(&mut self,
+    fn accept_handle_and_value_from_sender(
+        &mut self,
         sender: &String,
         handle: &String,
-        value: &String
+        value: &String,
     ) {
         // if already exists, then ignore
         if self.mailbox.contains_key(handle) {
-            let sender_exists_for_handle = self.mailbox
-                .get(handle)
-                .unwrap()
-                .contains_key(sender);
-            if sender_exists_for_handle { return; } //ignore duplicate msg!
+            let sender_exists_for_handle = self.mailbox.get(handle).unwrap().contains_key(sender);
+            if sender_exists_for_handle {
+                return;
+            } //ignore duplicate msg!
         } else {
             //mailbox never got a message by this handle so lets make room for it
             self.mailbox.insert(handle.clone(), HashMap::new());

@@ -1,33 +1,29 @@
-use ark_poly::{Polynomial, univariate::DensePolynomial};
+#![allow(dead_code)]
+
+use ark_poly::{univariate::DensePolynomial, Polynomial};
 use ark_std::UniformRand;
 use rand::Rng;
 
-use crate::common::*;
+use crate::common::F;
 
-pub fn share<R: Rng>(
-    secret: &F, 
-    access: (u64, u64),
-    rng: &mut R
-) -> Vec<(F,F)> {
+pub fn share<R: Rng>(secret: &F, access: (u64, u64), rng: &mut R) -> Vec<(F, F)> {
     let (t, n) = access;
 
     // let us sample a random degree t-1 polynomial.
     // A degree t - 1 polynomial has t coefficients,
     // which we sample at random
-    let mut coeffs: Vec<F> = (0..t)
-        .map(|_| F::rand(rng))
-        .collect();
-    coeffs[0] = secret.clone();
+    let mut coeffs: Vec<F> = (0..t).map(|_| F::rand(rng)).collect();
+    coeffs[0] = *secret;
 
     // we now have all the right coefficients to define the polynomial
     let poly = DensePolynomial { coeffs };
 
     // Shamir shares are just evaluations of our polynomial above
-    let shares = (1..=n).map(|x| (F::from(x), poly.evaluate(&F::from(x)))).collect();
 
-    shares
+    (1..=n)
+        .map(|x| (F::from(x), poly.evaluate(&F::from(x))))
+        .collect()
 }
-
 
 /*
  * recover implements the Shamir reconstruction algorithm,
@@ -35,7 +31,7 @@ pub fn share<R: Rng>(
  * shares contains the polynomial points { (x,y) }, where x is
  * some field element, and y is the polynomial evaluation at x.
  */
-pub fn recover(shares: &Vec<(F,F)>) -> F {
+pub fn recover(shares: &Vec<(F, F)>) -> F {
     let xs: Vec<F> = shares.iter().map(|(x, _)| *x).collect();
     let ys: Vec<F> = shares.iter().map(|(_, y)| *y).collect();
 
@@ -47,8 +43,8 @@ pub fn recover(shares: &Vec<(F,F)>) -> F {
     let secret = ys
         .iter()
         .zip(lagrange_coeffs.iter())
-        .fold(F::from(0), |acc, (a,b)| acc + (a * b));
-    
+        .fold(F::from(0), |acc, (a, b)| acc + (a * b));
+
     secret
 }
 
@@ -75,9 +71,13 @@ fn lagrange_coefficients(xs: &[F], x: F) -> Vec<F> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::common::F;
+    use ark_std::UniformRand;
     use rand::thread_rng;
+    use rand::Rng;
     use rand_chacha::rand_core::SeedableRng;
+
+    use super::{recover, share};
 
     #[test]
     fn test_shamir_correctness() {

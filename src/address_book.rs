@@ -1,4 +1,4 @@
-use std::{fmt, collections::HashMap};
+use std::{collections::HashMap, fmt};
 
 pub type Pok3rPeerId = String;
 
@@ -17,11 +17,6 @@ impl fmt::Display for Pok3rPeer {
 
 pub type Pok3rAddrBook = HashMap<Pok3rPeerId, Pok3rPeer>;
 
-pub fn get_node_id_via_peer_id(
-    addr_book: &Pok3rAddrBook, 
-    peer_id: &Pok3rPeerId) -> Option<u64> {
-    match addr_book.get(peer_id) {
-        Some(p) => Some(p.node_id),
-        None => None
-    }
+pub fn get_node_id_via_peer_id(addr_book: &Pok3rAddrBook, peer_id: &Pok3rPeerId) -> Option<u64> {
+    addr_book.get(peer_id).map(|p| p.node_id)
 }
