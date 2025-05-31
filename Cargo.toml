@@ -18,11 +18,12 @@ ark-std = { version = "0.4.0" }
 ark-ec = { version = "0.4.0" }
 ark-ff = { version = "0.4.0" }
 ark-poly = { version = "0.4.0" }
-ark-bls12-377 = { version = "0.4.0", default-features = false, features = [ "curve" ] }
-ark-bls12-381 = { version = "0.4.0", default-features = false, features = [ "curve" ] }
 ark-serialize = { version = "^0.4.0", default-features = true }
 ark-crypto-primitives = { version = "0.4.0", default-features = false, features = [ "crh" ] }
 num-bigint = { version = "0.4.0", default-features = false }
+
+ark-bls12-377 = { version = "0.4.0", default-features = false, features = [ "curve" ], optional = true }
+ark-bls12-381 = { version = "0.4.0", default-features = false, features = [ "curve" ], optional = true }
 
 rand = "0.8.5"
 rand_chacha = "0.3.1"
@@ -43,11 +44,13 @@ serde_json = { version = "*" }
 bs58 = { version = "*" }
 
 [features]
+default  = ["bls12_381"]
+
 asm = [ "ark-ff/asm" ]
 parallel = [ "ark-std/parallel", "ark-ff/parallel",  "ark-ec/parallel", ]
 print = []
-# TODO: with cleaner features can make ark-bls-12-XXX optional dependency
-bls12_377 = []
+bls12_381 = ["ark-bls12-381"]
+bls12_377 = ["ark-bls12-377"]
 
 [profile.dev]
 opt-level = 3

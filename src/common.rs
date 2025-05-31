@@ -1,3 +1,5 @@
+use crate::kzg::KZG10;
+use ark_ec::pairing::{Pairing, PairingOutput};
 use ark_poly::univariate::DensePolynomial;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use serde::{Deserialize, Serialize};
@@ -11,25 +13,14 @@ pub const NUM_RAND_SHARINGS: usize = 987;
 
 #[cfg(feature = "bls12_377")]
 pub type Curve = ark_bls12_377::Bls12_377;
-#[cfg(feature = "bls12_377")]
-pub type F = ark_bls12_377::Fr;
-#[cfg(feature = "bls12_377")]
-pub type G1 = ark_bls12_377::G1Projective;
-#[cfg(feature = "bls12_377")]
-pub type G2 = ark_bls12_377::G2Projective;
-
-#[cfg(not(feature = "bls12_377"))]
+#[cfg(feature = "bls12_381")]
 pub type Curve = ark_bls12_381::Bls12_381;
-#[cfg(not(feature = "bls12_377"))]
-pub type F = ark_bls12_381::Fr;
-#[cfg(not(feature = "bls12_377"))]
-pub type G1 = ark_bls12_381::G1Projective;
-#[cfg(not(feature = "bls12_377"))]
-pub type G2 = ark_bls12_381::G2Projective;
 
-pub type Gt = ark_ec::pairing::PairingOutput<Curve>;
-pub type KZG =
-    crate::kzg::KZG10<Curve, DensePolynomial<<Curve as ark_ec::pairing::Pairing>::ScalarField>>;
+pub type F = <Curve as Pairing>::ScalarField;
+pub type G1 = <Curve as Pairing>::G1;
+pub type G2 = <Curve as Pairing>::G2;
+pub type Gt = PairingOutput<Curve>;
+pub type KZG = KZG10<Curve, DensePolynomial<F>>;
 
 /// EvalNetMsg represents the types of messages that
 /// we expect to flow between the evaluator and networkd
