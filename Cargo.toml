@@ -30,7 +30,7 @@ rand_chacha = "0.3.1"
 paste = { version = "1.0" }
 crossbeam = { version = "0.8.2" }
 tracing = { version = "0.1", default-features = false, features = [ "attributes" ] }
-tracing-subscriber = { version = "0.2" }
+tracing-subscriber = { version = "0.3" }
 
 async-std = { version = "1.12", features = ["attributes"] }
 async-trait = "0.1"
