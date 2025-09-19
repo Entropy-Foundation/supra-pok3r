@@ -1,8 +1,6 @@
-use async_std::task;
 use clap::Parser;
-use futures::channel::mpsc;
 use num_bigint::BigUint;
-use std::thread;
+use tokio::sync::mpsc;
 
 use pok3r::address_book::parse_addr_book_from_json;
 use pok3r::common::{EvalNetMsg, DECK_SIZE, PERM_SIZE};
@@ -30,21 +28,22 @@ struct Args {
     parties: u64,
 }
 
-#[async_std::main]
+#[tokio::main]
 async fn main() {
     let args = Args::parse();
 
     //these channels will connect the evaluator and the network daemons
-    let (mut n2e_tx, n2e_rx) = mpsc::unbounded::<EvalNetMsg>();
-    let (e2n_tx, e2n_rx) = mpsc::unbounded::<EvalNetMsg>();
+    let (mut n2e_tx, n2e_rx) = mpsc::unbounded_channel::<EvalNetMsg>();
+    let (e2n_tx, e2n_rx) = mpsc::unbounded_channel::<EvalNetMsg>();
 
-    let netd_handle = thread::spawn(move || {
-        let result = task::block_on(pok3r::network::run_networking_daemon(
+    let netd_handle = tokio::spawn(async move {
+        let result = pok3r::network::run_networking_daemon(
             args.seed,
             &parse_addr_book_from_json(args.parties),
             &mut n2e_tx,
             e2n_rx,
-        ));
+        )
+        .await;
         if let Err(err) = result {
             eprint!("Networking error {:?}", err);
         }
@@ -55,10 +54,8 @@ async fn main() {
     let mut mpc = Evaluator::new(messaging).await;
 
     //this is a hack until we figure out
-    task::block_on(async {
-        task::sleep(std::time::Duration::from_secs(1)).await;
-        println!("After sleeping for 1 second.");
-    });
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    println!("After sleeping for 1 second.");
 
     // KZG setup runs once
     let pp = compute_params();
@@ -125,5 +122,5 @@ async fn main() {
     );
     println!("\ncompleted.");
 
-    netd_handle.join().unwrap();
+    let _ = netd_handle.await.unwrap();
 }

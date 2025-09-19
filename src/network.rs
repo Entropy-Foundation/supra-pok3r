@@ -1,4 +1,4 @@
-use futures::{channel::mpsc, future::Either, select, SinkExt, StreamExt};
+use futures::future::Either;
 use libp2p::{
     core::{muxing::StreamMuxerBox, transport::OrTransport, upgrade},
     gossipsub, identity, mdns, noise,
@@ -11,6 +11,11 @@ use std::error::Error;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
+use futures::StreamExt;
+use tokio::select; // use Tokio’s select!
+use tokio::sync::mpsc; // still needed for select_next_some()
+                       //use tokio_util::either::Either;
+
 use crate::{
     address_book::{get_node_id_via_peer_id, Pok3rAddrBook, Pok3rPeerId},
     common::EvalNetMsg,
@@ -20,7 +25,7 @@ use crate::{
 #[derive(NetworkBehaviour)]
 struct MyBehaviour {
     gossipsub: gossipsub::Behaviour,
-    mdns: mdns::async_io::Behaviour,
+    mdns: mdns::tokio::Behaviour,
 }
 
 fn generate_ed25519(secret_key_seed: u8) -> identity::Keypair {
@@ -57,13 +62,13 @@ pub async fn run_networking_daemon_with_kill(
     println!("Local peer id: {local_peer_id}");
 
     // Set up an encrypted DNS-enabled TCP Transport over the yamux protocol.
-    let tcp_transport = tcp::async_io::Transport::new(tcp::Config::default().nodelay(true))
+    let tcp_transport = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
         .upgrade(upgrade::Version::V1Lazy)
         .authenticate(noise::Config::new(&id_keys).expect("signing libp2p-noise static keypair"))
         .multiplex(yamux::Config::default())
-        .timeout(std::time::Duration::from_secs(20))
+        .timeout(Duration::from_secs(20))
         .boxed();
-    let quic_transport = quic::async_std::Transport::new(quic::Config::new(&id_keys));
+    let quic_transport = quic::tokio::Transport::new(quic::Config::new(&id_keys));
     let transport = OrTransport::new(quic_transport, tcp_transport)
         .map(|either_output, _| match either_output {
             Either::Left((peer_id, muxer)) => (peer_id, StreamMuxerBox::new(muxer)),
@@ -98,10 +103,10 @@ pub async fn run_networking_daemon_with_kill(
     gossipsub.subscribe(&topic)?;
 
     // Create a Swarm to manage peers and events
-    let mdns = mdns::async_io::Behaviour::new(mdns::Config::default(), local_peer_id)?;
+    let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)?;
     let behaviour = MyBehaviour { gossipsub, mdns };
-    let mut swarm = SwarmBuilder::with_new_identity()
-        .with_async_std()
+    let mut swarm: libp2p::Swarm<_> = SwarmBuilder::with_new_identity()
+        .with_tokio()
         .with_other_transport(|_| transport)?
         .with_behaviour(|_| behaviour)?
         .build();
@@ -119,24 +124,29 @@ pub async fn run_networking_daemon_with_kill(
     let mut is_killed = false;
     while !is_killed {
         is_killed = match rx_kill.as_mut() {
-            Some(recv_kill) => match recv_kill.try_next() {
-                Ok(Some(())) => {
-                    #[cfg(feature = "print")]
-                    println!("kill message received");
-                    true
+            Some(recv_kill) => {
+                if !recv_kill.is_empty() {
+                    match recv_kill.recv().await {
+                        Some(()) => {
+                            #[cfg(feature = "print")]
+                            println!("kill message received");
+                            true
+                        }
+                        None => {
+                            #[cfg(feature = "print")]
+                            println!("manager disconnected");
+                            true
+                        }
+                    }
+                } else {
+                    false
                 }
-                Ok(None) => {
-                    #[cfg(feature = "print")]
-                    println!("manager disconnected");
-                    true
-                }
-                Err(_) => false,
-            },
+            }
             None => false,
         };
         select! {
             //receives requests for publishing messages from the evaluator
-            msg_to_send = rx.select_next_some() => {
+            msg_to_send = rx.recv() => {
                 let s = serde_json::to_string(&msg_to_send).unwrap();
                 if let Err(e) = swarm
                     .behaviour_mut().gossipsub
@@ -160,7 +170,7 @@ pub async fn run_networking_daemon_with_kill(
                                 (connected_peers.len() == addr_book.len() - 1) {
                                 let _r = tx.send(
                                     EvalNetMsg::ConnectionEstablished { success: true }
-                                ).await;
+                                );
                                 // if let Err(err) = r {
                                 //     eprint!("network error {:?}", err);
                                 // }
@@ -184,7 +194,7 @@ pub async fn run_networking_daemon_with_kill(
                 })) => {
                     let msg_as_str = String::from_utf8_lossy(&message.data);
                     let deserialized_struct = serde_json::from_str(&msg_as_str).unwrap();
-                    let r = tx.send(deserialized_struct).await;
+                    let r = tx.send(deserialized_struct);
                     if let Err(err) = r {
                         eprint!("network error {:?}", err);
                     }
@@ -227,7 +237,7 @@ impl MessagingSystem {
         // so, here we will loop till we get that
         loop {
             //do a blocking recv on the rx channel
-            let msg: EvalNetMsg = rx.select_next_some().await;
+            let msg: EvalNetMsg = rx.recv().await.expect("failed to get message");
             match msg {
                 EvalNetMsg::ConnectionEstablished { success } => {
                     if success {
@@ -273,7 +283,7 @@ impl MessagingSystem {
                 value: values.as_ref()[0].clone(),
             }
         };
-        let r = self.tx.send(msg).await;
+        let r = self.tx.send(msg);
         if let Err(err) = r {
             eprint!("evaluator error {:?}", err);
         }
@@ -298,7 +308,7 @@ impl MessagingSystem {
                     }
                 }
 
-                let msg: EvalNetMsg = self.rx.select_next_some().await;
+                let msg: EvalNetMsg = self.rx.recv().await.expect("failed to get message");
                 self.process_next_message(&msg);
             }
 
