@@ -45,6 +45,12 @@ pub enum EvalNetMsg {
     },
 }
 
+#[derive(Debug, Clone, CanonicalSerialize, CanonicalDeserialize)]
+pub struct DeckProof {
+    pub perm: PermutationProof,
+    pub lec: EncryptionProof,
+}
+
 /// PermutationProof is a structure for the permutation proofs
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct PermutationProof {
@@ -67,14 +73,18 @@ pub type Ciphertext = (G2, Vec<Gt>);
 
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
 pub struct EncryptionProof {
-    pub pk: G2,
-    pub ids: Vec<Vec<u8>>,
-    pub card_commitment: G1, //same as f_com above
     pub card_poly_eval: F,
     pub eval_proof: G1,
     pub hiding_ciphertext: Gt,
     pub t: Gt,
     pub sigma_proof: Option<SigmaProof>,
+}
+
+#[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]
+pub struct EncryptionInstance {
+    pub pk: G2,
+    pub ids: Vec<Vec<u8>>,
+    pub card_commitment: G1, //same as f_com above
 }
 
 #[derive(Clone, Debug, CanonicalSerialize, CanonicalDeserialize)]

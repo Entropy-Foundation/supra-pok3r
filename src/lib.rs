@@ -1,4 +1,6 @@
 pub mod address_book;
+pub mod aws;
+pub mod card_id;
 pub mod common;
 pub mod encoding;
 pub mod evaluator;

@@ -2,11 +2,12 @@ use ark_ec::{pairing::Pairing, Group};
 use ark_poly::univariate::{DenseOrSparsePolynomial, DensePolynomial};
 use ark_poly::DenseUVPolynomial;
 use ark_std::{One, UniformRand, Zero};
-use rand::thread_rng;
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{thread_rng, Rng, SeedableRng};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::ops::{Add, Mul};
 
+use crate::card_id::gen_ids;
 use crate::common::{
     Curve, Gt, F, G1, G2, KZG, LOG_PERM_SIZE, NUM_BEAVER_TRIPLES, NUM_RAND_SHARINGS, PERM_SIZE,
 };
@@ -35,10 +36,17 @@ pub struct Evaluator {
     beaver_counter: u64,
     /// keep track of the number of rand sharings consumed
     rand_counter: u64,
+    /// deck number used to generate seed from precomputation and ids for encryption
+    deck_no: u64,
 }
 
 impl Evaluator {
-    pub async fn new(messaging: network::MessagingSystem) -> Self {
+    pub async fn new(messaging: network::MessagingSystem, deck_no: u64) -> Self {
+        let digest = Sha256::digest(&deck_no.to_be_bytes());
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&digest);
+        let mut rng = rand_chacha::ChaCha8Rng::from_seed(seed);
+
         let mut evaluator = Evaluator {
             wire_shares: HashMap::new(),
             beaver_triples: Vec::new(),
@@ -47,10 +55,20 @@ impl Evaluator {
             gate_counter: 0,
             beaver_counter: 0,
             rand_counter: 0,
+            deck_no,
         };
-        evaluator.preprocess_triples(NUM_BEAVER_TRIPLES).await;
-        evaluator.preprocess_rand_sharings(NUM_RAND_SHARINGS).await;
         evaluator
+            .preprocess_triples(NUM_BEAVER_TRIPLES, &mut rng)
+            .await;
+        evaluator
+            .preprocess_rand_sharings(NUM_RAND_SHARINGS, &mut rng)
+            .await;
+        evaluator
+    }
+
+    pub async fn next(self) -> Self {
+        // later can use some kind of shared memory between threads for next deck instead of static counter
+        Self::new(self.messaging, self.deck_no + 1).await
     }
 
     /// returns a unique wire label in the circuit
@@ -76,6 +94,13 @@ impl Evaluator {
         self.rand_counter += 1;
 
         handle
+    }
+
+    pub fn gen_ids(&self) -> Vec<Vec<u8>> {
+        gen_ids(self.deck_no)
+            .iter()
+            .map(|id| id.to_bytes().to_vec())
+            .collect()
     }
 
     pub async fn batch_ran_64(&mut self, len: usize) -> Vec<String> {
@@ -875,43 +900,37 @@ impl Evaluator {
         (c1, c2s)
     }
 
-    async fn preprocess_rand_sharings(&mut self, num_sharings: usize) {
+    async fn preprocess_rand_sharings(&mut self, num_sharings: usize, rng: &mut impl Rng) {
         let n: u64 = self.messaging.addr_book.len() as u64;
         let index = (self.messaging.get_my_id() - 1) as usize;
 
-        let mut rng = rand_chacha::ChaCha8Rng::from_seed([1u8; 32]);
-
         for _i in 0..num_sharings {
-            let secret = F::rand(&mut rng);
-            let shares = crate::shamir::share(&secret, (n, n), &mut rng);
+            let secret = F::rand(rng);
+            let shares = crate::shamir::share(&secret, (n, n), rng);
             self.rand_sharings.push(shares[index].1);
         }
     }
 
-    async fn _preprocess_triples(&mut self, num_beavers: usize) {
+    async fn _preprocess_triples(&mut self, num_beavers: usize, rng: &mut impl Rng) {
         let n: u64 = self.messaging.addr_book.len() as u64;
         let index = (self.messaging.get_my_id() - 1) as usize;
 
-        let mut rng = rand_chacha::ChaCha8Rng::from_seed([1u8; 32]);
-
         for _i in 0..num_beavers {
-            let a = F::rand(&mut rng);
-            let b = F::rand(&mut rng);
+            let a = F::rand(rng);
+            let b = F::rand(rng);
             let c = a * b;
 
-            let s_a = shamir::share(&a, (n, n), &mut rng)[index].1;
-            let s_b = shamir::share(&b, (n, n), &mut rng)[index].1;
-            let s_c = shamir::share(&c, (n, n), &mut rng)[index].1;
+            let s_a = shamir::share(&a, (n, n), rng)[index].1;
+            let s_b = shamir::share(&b, (n, n), rng)[index].1;
+            let s_c = shamir::share(&c, (n, n), rng)[index].1;
 
             self.beaver_triples.push((s_a, s_b, s_c));
         }
     }
 
-    async fn preprocess_triples(&mut self, num_beavers: usize) {
+    async fn preprocess_triples(&mut self, num_beavers: usize, rng: &mut impl Rng) {
         let n: usize = self.messaging.addr_book.len();
         let my_id = self.messaging.get_my_id();
-
-        let mut seeded_rng = StdRng::from_seed([42u8; 32]);
 
         let mut sum_a = vec![F::from(0); num_beavers];
         let mut sum_b = vec![F::from(0); num_beavers];
@@ -922,9 +941,9 @@ impl Evaluator {
             let b = F::rand(&mut thread_rng());
 
             for j in 1..n {
-                let party_j_share_a = F::rand(&mut seeded_rng);
-                let party_j_share_b = F::rand(&mut seeded_rng);
-                let party_j_share_c = F::rand(&mut seeded_rng);
+                let party_j_share_a = F::rand(rng);
+                let party_j_share_b = F::rand(rng);
+                let party_j_share_c = F::rand(rng);
 
                 sum_a[i] += party_j_share_a;
                 sum_b[i] += party_j_share_b;

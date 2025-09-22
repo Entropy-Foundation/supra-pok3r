@@ -15,8 +15,8 @@ use std::{
 };
 
 use crate::common::{
-    Ciphertext, Curve, EncryptionProof, Gt, PermutationProof, SigmaProof, DECK_SIZE, F, G1, G2,
-    NUM_SAMPLES, PERM_SIZE,
+    Ciphertext, Curve, DeckProof, EncryptionInstance, EncryptionProof, Gt, PermutationProof,
+    SigmaProof, DECK_SIZE, F, G1, G2, NUM_SAMPLES, PERM_SIZE,
 };
 use crate::evaluator::Evaluator;
 use crate::hash::hash_to_g1;
@@ -639,11 +639,10 @@ pub async fn encrypt_and_prove(
     pp: &UniversalParams<Curve>,
     evaluator: &mut Evaluator,
     card_handles: Vec<String>,
-    card_commitment: G1, // C = g^{\sum_i card_handles_i L_i(x) + alpha1 * (x^PERM_SIZE - 1)}
     alpha1: String,
-    pk: G2,
-    ids: Vec<Vec<u8>>,
+    pk: &G2,
 ) -> (Ciphertext, EncryptionProof) {
+    let ids = evaluator.gen_ids();
     // Get all cards from card handles
     let mut cards = vec![];
     for h in card_handles.clone() {
@@ -781,9 +780,6 @@ pub async fn encrypt_and_prove(
     let sigma_proof = SigmaProof { a1, a2, y };
 
     let encryption_proof = EncryptionProof {
-        pk,
-        ids,
-        card_commitment,
         card_poly_eval: poly_eval,
         eval_proof: pi,
         hiding_ciphertext: alpha1_c2,
@@ -800,6 +796,7 @@ pub fn verify_encryption_argument(
     pp: &UniversalParams<Curve>,
     ctxt: &Ciphertext,
     proof: &EncryptionProof,
+    instance: &EncryptionInstance,
 ) -> bool {
     // Common first element of all ciphertexts
     let c1 = ctxt.0;
@@ -829,7 +826,7 @@ pub fn verify_encryption_argument(
     // Check evaluation proof
     if !KZG::verify_opening_proof(
         pp,
-        &proof.card_commitment.into_affine(),
+        &instance.card_commitment.into_affine(),
         &delta,
         &proof.card_poly_eval,
         &proof.eval_proof.into_affine(),
@@ -846,14 +843,14 @@ pub fn verify_encryption_argument(
 
     let mut batch_h = G1::zero();
     for i in 0..PERM_SIZE {
-        let hash_id = hash_to_g1(proof.ids[i].as_ref());
+        let hash_id = hash_to_g1(instance.ids[i].as_ref());
         batch_h = batch_h.add(hash_id.mul(lagrange_delta[i]));
     }
     // Add the contribution from the hiding term (multiplied with (delta^PERM_SIZE - 1))
     let hash_id = hash_to_g1(&BigUint::from(123_u64).to_bytes_le());
     batch_h = batch_h.add(hash_id.mul(utils::compute_power(&delta, PERM_SIZE as u64) - F::from(1)));
 
-    let e_batch = <Curve as Pairing>::pairing(batch_h, proof.pk);
+    let e_batch = <Curve as Pairing>::pairing(batch_h, instance.pk);
 
     // Check that prod_i c2_i^Li(delta) * alpha1_c2*(delta*PERM_SIZE - 1) = g^f(delta) * t
     let mut lhs = Gt::zero();
@@ -912,6 +909,17 @@ pub fn verify_encryption_argument(
     }
 
     true
+}
+
+pub fn verify_deck_proof(
+    pp: &UniversalParams<Curve>,
+    proof: &DeckProof,
+    ctxt: &Ciphertext,
+    instance: &EncryptionInstance,
+) -> bool {
+    verify_encryption_argument(pp, ctxt, &proof.lec, instance)
+        && verify_permutation_argument(pp, &proof.perm)
+        && instance.card_commitment.eq(&proof.perm.f_com)
 }
 
 /// Estimating time to decrypt one card at game time

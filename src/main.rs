@@ -1,14 +1,15 @@
 use clap::Parser;
-use num_bigint::BigUint;
 use tokio::sync::mpsc;
 
 use pok3r::address_book::parse_addr_book_from_json;
-use pok3r::common::{EvalNetMsg, DECK_SIZE, PERM_SIZE};
+use pok3r::aws::{init_aws_client, read_deck_from_aws, save_deck_to_aws};
+use pok3r::card_id::gen_ids;
+use pok3r::common::{DeckProof, EncryptionInstance, EvalNetMsg, DECK_SIZE, PERM_SIZE};
 use pok3r::evaluator::Evaluator;
 use pok3r::shuffler::{
     compute_decryption_cache, compute_decryption_key, compute_keyper_keys, compute_params,
     compute_permutation_argument, decrypt_one_card, encrypt_and_prove, shuffle_deck,
-    verify_encryption_argument, verify_permutation_argument,
+    verify_deck_proof, verify_encryption_argument, verify_permutation_argument,
 };
 
 /// Simple program to greet a person
@@ -51,7 +52,7 @@ async fn main() {
 
     let addr_book = parse_addr_book_from_json(args.parties);
     let messaging = pok3r::network::MessagingSystem::new(&args.id, addr_book, e2n_tx, n2e_rx).await;
-    let mut mpc = Evaluator::new(messaging).await;
+    let mut mpc = Evaluator::new(messaging, 0).await;
 
     //this is a hack until we figure out
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -64,63 +65,94 @@ async fn main() {
     // FIXME: Implement DKG to generate the public key
     let (msk, mpk) = compute_keyper_keys();
 
-    // Actual protocol
-    let card_share_handles = shuffle_deck(&mut mpc).await;
-    println!("Generated a deck of {} cards", card_share_handles.len());
-
-    let (perm_proof, alpha1) =
-        compute_permutation_argument(&pp, &mut mpc, &card_share_handles).await;
-
-    // Get random ids as byte strings
-    let ids = (0..PERM_SIZE)
-        .map(|i| BigUint::from(i as u64).to_bytes_le())
-        .collect::<Vec<Vec<u8>>>();
-
-    // Encrypt and prove
-    let (ctxt, encryption_proof) = encrypt_and_prove(
-        &pp,
-        &mut mpc,
-        card_share_handles.clone(),
-        perm_proof.f_com,
-        alpha1,
-        mpk,
-        ids.clone(),
-    )
-    .await;
-
     // decrypt all cards
     let cache = compute_decryption_cache();
-    let mut decrypted_cards = Vec::new();
-    for i in 0..PERM_SIZE {
-        let dec_key = compute_decryption_key(&ids[i], msk);
 
-        // ignore the first (PERM_SIZE - DECK_SIZE) cards, which are not part of deck
-        if i >= (PERM_SIZE - DECK_SIZE) {
-            let card = decrypt_one_card(i, &dec_key, &ctxt, &cache).unwrap();
-            decrypted_cards.push(card);
-            print!("{},", card);
+    let client = init_aws_client().await;
+
+    for deck_no in 0..3 {
+        // Actual protocol
+        let card_share_handles = shuffle_deck(&mut mpc).await;
+        println!("Generated a deck of {} cards", card_share_handles.len());
+
+        let (perm_proof, alpha1) =
+            compute_permutation_argument(&pp, &mut mpc, &card_share_handles).await;
+
+        // Get random ids as byte strings
+        let ids: Vec<Vec<u8>> = gen_ids(deck_no)
+            .iter()
+            .map(|id| id.to_bytes().to_vec())
+            .collect();
+
+        let instance = EncryptionInstance {
+            pk: mpk,
+            ids: ids.clone(),
+            card_commitment: perm_proof.f_com.clone(),
+        };
+
+        // Encrypt and prove
+        let (ctxt, encryption_proof) =
+            encrypt_and_prove(&pp, &mut mpc, card_share_handles.clone(), alpha1, &mpk).await;
+
+        let mut decrypted_cards = Vec::new();
+        for i in 0..PERM_SIZE {
+            let dec_key = compute_decryption_key(&ids[i], msk);
+
+            // ignore the first (PERM_SIZE - DECK_SIZE) cards, which are not part of deck
+            if i >= (PERM_SIZE - DECK_SIZE) {
+                let card = decrypt_one_card(i, &dec_key, &ctxt, &cache).unwrap();
+                decrypted_cards.push(card);
+                print!("{},", card);
+            }
         }
+
+        assert!(
+            verify_permutation_argument(&pp, &perm_proof),
+            "Permutation argument verification failed"
+        );
+        assert!(
+            verify_encryption_argument(&pp, &ctxt, &encryption_proof, &instance),
+            "Encryption proof verification failed"
+        );
+
+        let proof = DeckProof {
+            perm: perm_proof,
+            lec: encryption_proof,
+        };
+        assert!(
+            verify_deck_proof(&pp, &proof, &ctxt, &instance),
+            "Combined deck proof proof verification failed"
+        );
+
+        // we can verify the proof, but let's also do a sanity check
+        // check that decrypted cards is a permutation of 0..51
+        let mut sorted_cards = decrypted_cards.clone();
+        sorted_cards.sort_unstable();
+        let expected_cards: Vec<usize> = (0..DECK_SIZE).collect();
+        assert_eq!(
+            sorted_cards, expected_cards,
+            "Decrypted cards are not a valid permutation of 0..51"
+        );
+        println!("\ncompleted.");
+
+        if args.seed == 1 {
+            save_deck_to_aws(&client, deck_no, ctxt.clone(), proof.clone()).await;
+
+            let (deck_aws, proof_aws) = read_deck_from_aws(&client, deck_no)
+                .await
+                .expect("failed to get aws deck proof");
+
+            assert!(
+                verify_deck_proof(&pp, &proof_aws, &deck_aws, &instance),
+                "failed to validate deck and proof from aws"
+            );
+        }
+
+        mpc = mpc.next().await;
+
+        //this is a hack until we figure out
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        println!("After sleeping for 1 second.");
     }
-
-    assert!(
-        verify_permutation_argument(&pp, &perm_proof),
-        "Permutation argument verification failed"
-    );
-    assert!(
-        verify_encryption_argument(&pp, &ctxt, &encryption_proof),
-        "Encryption proof verification failed"
-    );
-
-    // we can verify the proof, but let's also do a sanity check
-    // check that decrypted cards is a permutation of 0..51
-    let mut sorted_cards = decrypted_cards.clone();
-    sorted_cards.sort_unstable();
-    let expected_cards: Vec<usize> = (0..DECK_SIZE).collect();
-    assert_eq!(
-        sorted_cards, expected_cards,
-        "Decrypted cards are not a valid permutation of 0..51"
-    );
-    println!("\ncompleted.");
-
     let _ = netd_handle.await.unwrap();
 }

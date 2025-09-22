@@ -13,45 +13,66 @@ rust-version = "1.63"
 
 [dependencies]
 sha2 = "0.9"
-criterion = { version = "0.4.0", features = [ "html_reports" ] }
+criterion = { version = "0.4.0", features = ["html_reports"] }
 ark-std = { version = "0.4.0" }
 ark-ec = { version = "0.4.0" }
 ark-ff = { version = "0.4.0" }
 ark-poly = { version = "0.4.0" }
 ark-serialize = { version = "^0.4.0", default-features = true }
-ark-crypto-primitives = { version = "0.4.0", default-features = false, features = [ "crh" ] }
+ark-crypto-primitives = { version = "0.4.0", default-features = false, features = [
+    "crh",
+] }
 num-bigint = { version = "0.4.0", default-features = false }
 
-ark-bls12-377 = { version = "0.4.0", default-features = false, features = [ "curve" ], optional = true }
-ark-bls12-381 = { version = "0.4.0", default-features = false, features = [ "curve" ], optional = true }
+ark-bls12-377 = { version = "0.4.0", default-features = false, features = [
+    "curve",
+], optional = true }
+ark-bls12-381 = { version = "0.4.0", default-features = false, features = [
+    "curve",
+], optional = true }
 
 rand = "0.8.5"
 rand_chacha = "0.3.1"
 paste = { version = "1.0" }
 crossbeam = { version = "0.8.2" }
-tracing = { version = "0.1", default-features = false, features = [ "attributes" ] }
+tracing = { version = "0.1", default-features = false, features = [
+    "attributes",
+] }
 tracing-subscriber = { version = "0.2" }
 
 env_logger = "0.10.0"
 futures = "0.3.28"
-libp2p = { version = "0.52.0", features = ["tokio", "gossipsub", "mdns", "noise", "macros", "tcp", "yamux"] }
+libp2p = { version = "0.52.0", features = [
+    "tokio",
+    "gossipsub",
+    "mdns",
+    "noise",
+    "macros",
+    "tcp",
+    "yamux",
+] }
 libp2p-quic = { version = "0.8.0-alpha", features = ["tokio"] }
-clap = { version = "4.3.17", default-features = false, features = ["std", "derive"] }
+clap = { version = "4.3.17", default-features = false, features = [
+    "std",
+    "derive",
+] }
 serde = { version = "1", default-features = false, features = ["derive"] }
 serde_json = { version = "*" }
 bs58 = { version = "*" }
 
 tokio = { version = "1.12.0", features = ["full"] }
+aws-config = "1"
+aws-sdk-s3 = "1"
+hex = "0.4.3"
 
 [features]
-default  = ["bls12_381"]
+default = ["bls12_381"]
 
-asm = [ "ark-ff/asm" ]
-parallel = [ "ark-std/parallel", "ark-ff/parallel",  "ark-ec/parallel", ]
+asm = ["ark-ff/asm"]
+parallel = ["ark-std/parallel", "ark-ff/parallel", "ark-ec/parallel"]
 print = []
 bls12_381 = ["ark-bls12-381"]
 bls12_377 = ["ark-bls12-377"]
 
 [profile.dev]
 opt-level = 3
-

@@ -1,7 +1,7 @@
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use ark_std::io::Cursor;
 
-use crate::common::{Gt, F, G1, G2};
+use crate::common::{Ciphertext, DeckProof, Gt, F, G1, G2};
 
 pub fn encode_f_as_bs58_str(value: &F) -> String {
     let mut buffer: Vec<u8> = Vec::new();
@@ -45,4 +45,16 @@ pub fn encode_gt_as_bs58_str(value: &Gt) -> String {
 pub fn decode_bs58_str_as_gt(msg: &String) -> Gt {
     let decoded = bs58::decode(msg).into_vec().unwrap();
     Gt::deserialize_compressed(&mut Cursor::new(decoded)).unwrap()
+}
+
+pub fn serialize_deck_and_proof(deck: Ciphertext, proof: DeckProof) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    (deck, proof)
+        .serialize_compressed(&mut bytes)
+        .expect("failed to serialize deck and proof");
+    bytes
+}
+
+pub fn deserialize_deck_and_proof(bytes: Vec<u8>) -> Result<(Ciphertext, DeckProof), ()> {
+    CanonicalDeserialize::deserialize_compressed(&*bytes).map_err(|_| ())
 }
