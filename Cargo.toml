@@ -61,9 +61,13 @@ serde_json = { version = "*" }
 bs58 = { version = "*" }
 
 tokio = { version = "1.12.0", features = ["full"] }
-aws-config = "1"
-aws-sdk-s3 = "1"
+aws-config = { version = "1", optional = true }
+aws-sdk-s3 = { version = "1", optional = true }
+aws-sdk-ec2 = { version = "1", optional = true }
+aws-sdk-dynamodb = { version = "1", optional = true }
 hex = "0.4.3"
+anyhow = "1"
+reqwest = { version = "0.11.11", default-features = false } #features = ["blocking", "json"]
 
 [features]
 default = ["bls12_381"]
@@ -73,6 +77,52 @@ parallel = ["ark-std/parallel", "ark-ff/parallel", "ark-ec/parallel"]
 print = []
 bls12_381 = ["ark-bls12-381"]
 bls12_377 = ["ark-bls12-377"]
+aws = ["aws-config", "aws-sdk-s3", "aws-sdk-ec2", "aws-sdk-dynamodb"]
 
 [profile.dev]
 opt-level = 3
+
+[[bin]]
+name = "load_ip_map"
+path = "src/bin/load_ip_map.rs"
+required-features = ["aws"]
+
+[[bin]]
+name = "print_address_book"
+path = "src/bin/print_address_book.rs"
+required-features = ["aws"]
+
+[[bin]]
+name = "print_deck_dir"
+path = "src/bin/print_deck_dir.rs"
+required-features = ["aws"]
+
+[[bin]]
+name = "print_instance_id"
+path = "src/bin/print_instance_id.rs"
+required-features = ["aws"]
+
+[[bin]]
+name = "read_dynamo_db"
+path = "src/bin/read_dynamo_db.rs"
+required-features = ["aws"]
+
+[[bin]]
+name = "read_pk_dir"
+path = "src/bin/read_pk_dir.rs"
+required-features = ["aws"]
+
+[[bin]]
+name = "run_protocol"
+path = "src/bin/run_protocol.rs"
+required-features = ["aws"]
+
+[[bin]]
+name = "test_pk"
+path = "src/bin/test_pk.rs"
+required-features = ["aws"]
+
+[[bin]]
+name = "update_pk_bucket"
+path = "src/bin/update_pk_bucket.rs"
+required-features = ["aws"]

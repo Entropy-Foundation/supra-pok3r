@@ -1,0 +1,3 @@
+[alias]
+build-ec2 = "build --target x86_64-unknown-linux-musl --release --features aws"
+check-ec2 = "check --target x86_64-unknown-linux-musl --release --features aws"
