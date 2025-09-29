@@ -38,15 +38,12 @@ pub struct Evaluator {
     rand_counter: u64,
     /// deck number used to generate seed from precomputation and ids for encryption
     deck_no: u64,
+    /// number of batches tried
+    attempt_count: u64,
 }
 
 impl Evaluator {
-    pub async fn new(messaging: network::MessagingSystem, deck_no: u64) -> Self {
-        let digest = Sha256::digest(&deck_no.to_be_bytes());
-        let mut seed = [0u8; 32];
-        seed.copy_from_slice(&digest);
-        let mut rng = rand_chacha::ChaCha8Rng::from_seed(seed);
-
+    pub fn new(messaging: network::MessagingSystem, deck_no: u64) -> Self {
         let mut evaluator = Evaluator {
             wire_shares: HashMap::new(),
             beaver_triples: Vec::new(),
@@ -56,19 +53,51 @@ impl Evaluator {
             beaver_counter: 0,
             rand_counter: 0,
             deck_no,
+            attempt_count: 0,
         };
-        evaluator
-            .preprocess_triples(NUM_BEAVER_TRIPLES, &mut rng)
-            .await;
-        evaluator
-            .preprocess_rand_sharings(NUM_RAND_SHARINGS, &mut rng)
-            .await;
+        let mut rng = rand_chacha::ChaCha8Rng::from_seed(evaluator.seed());
+        evaluator.preprocess_triples(NUM_BEAVER_TRIPLES, &mut rng);
+        evaluator.preprocess_rand_sharings(NUM_RAND_SHARINGS, &mut rng);
         evaluator
     }
 
-    pub async fn next(self) -> Self {
+    /// generate unique seed based on (self.deck_no, self.attempt_count) and increment self.attempt_count
+    fn seed(&mut self) -> [u8; 32] {
+        let deck_no_bytes: [u8; 8] = self.deck_no.to_be_bytes();
+        let attempt_count_bytes: [u8; 8] = self.attempt_count.to_be_bytes();
+        let digest = Sha256::digest(&[&attempt_count_bytes[..], &deck_no_bytes[..]].concat());
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&digest);
+        self.attempt_count += 1;
+        seed
+    }
+
+    pub fn attempt_count(&self) -> u64 {
+        self.attempt_count
+    }
+
+    /// consume self to generate new deck with incremented deck_no
+    pub fn next(self) -> Self {
         // later can use some kind of shared memory between threads for next deck instead of static counter
-        Self::new(self.messaging, self.deck_no + 1).await
+        Self::new(self.messaging, self.deck_no + 1)
+    }
+
+    //async fn into_new(self, deck_no: u64, attempt_count: u64)
+
+    /// refresh self for next attempt
+    pub fn refresh(&mut self) {
+        // generate new seed and increment attempt_count
+        let mut rng = rand_chacha::ChaCha8Rng::from_seed(self.seed());
+
+        self.wire_shares = HashMap::new();
+        self.beaver_triples = Vec::new();
+        self.rand_sharings = Vec::new();
+        self.gate_counter = 0;
+        self.beaver_counter = 0;
+        self.rand_counter = 0;
+
+        self.preprocess_triples(NUM_BEAVER_TRIPLES, &mut rng);
+        self.preprocess_rand_sharings(NUM_RAND_SHARINGS, &mut rng);
     }
 
     /// returns a unique wire label in the circuit
@@ -900,7 +929,7 @@ impl Evaluator {
         (c1, c2s)
     }
 
-    async fn preprocess_rand_sharings(&mut self, num_sharings: usize, rng: &mut impl Rng) {
+    fn preprocess_rand_sharings(&mut self, num_sharings: usize, rng: &mut impl Rng) {
         let n: u64 = self.messaging.addr_book.len() as u64;
         let index = (self.messaging.get_my_id() - 1) as usize;
 
@@ -911,7 +940,7 @@ impl Evaluator {
         }
     }
 
-    async fn _preprocess_triples(&mut self, num_beavers: usize, rng: &mut impl Rng) {
+    fn _preprocess_triples(&mut self, num_beavers: usize, rng: &mut impl Rng) {
         let n: u64 = self.messaging.addr_book.len() as u64;
         let index = (self.messaging.get_my_id() - 1) as usize;
 
@@ -928,7 +957,7 @@ impl Evaluator {
         }
     }
 
-    async fn preprocess_triples(&mut self, num_beavers: usize, rng: &mut impl Rng) {
+    fn preprocess_triples(&mut self, num_beavers: usize, rng: &mut impl Rng) {
         let n: usize = self.messaging.addr_book.len();
         let my_id = self.messaging.get_my_id();
 

@@ -54,7 +54,7 @@ async fn main() {
 
     let addr_book = parse_addr_book_from_json(args.parties);
     let messaging = pok3r::network::MessagingSystem::new(&args.id, addr_book, e2n_tx, n2e_rx).await;
-    let mut mpc = Evaluator::new(messaging, 0).await;
+    let mut mpc = Evaluator::new(messaging, 0);
 
     //this is a hack until we figure out
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -70,10 +70,22 @@ async fn main() {
     // decrypt all cards
     let cache = compute_decryption_cache();
 
-    for deck_no in 0..5 {
+    for deck_no in 0..20 {
         // Actual protocol
-        let card_share_handles = shuffle_deck(&mut mpc).await;
-        println!("Generated a deck of {} cards", card_share_handles.len());
+        let mut _card_share_handles = shuffle_deck(&mut mpc).await;
+
+        while _card_share_handles.is_err() {
+            println!("failed to generate enough cards, trying again");
+            mpc.refresh();
+            _card_share_handles = shuffle_deck(&mut mpc).await;
+        }
+        let card_share_handles = _card_share_handles.unwrap();
+        #[cfg(feature = "print")]
+        println!(
+            "Generated a deck of {} cards after {} attempt(s)",
+            card_share_handles.len(),
+            mpc.attempt_count()
+        );
 
         let (perm_proof, alpha1) =
             compute_permutation_argument(&pp, &mut mpc, &card_share_handles).await;
@@ -135,7 +147,7 @@ async fn main() {
         );
         println!("\ncompleted.");
 
-        mpc = mpc.next().await;
+        mpc = mpc.next();
     }
     let _ = netd_handle.await.unwrap();
 }
@@ -173,7 +185,7 @@ async fn main() {
 
     let messaging =
         pok3r::network::MessagingSystem::new(&id_b58, address_book.clone(), e2n_tx, n2e_rx).await;
-    let mut mpc = Evaluator::new(messaging, 0).await;
+    let mut mpc = Evaluator::new(messaging, 0);
 
     //this is a hack until we figure out
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -189,10 +201,22 @@ async fn main() {
     // decrypt all cards
     let cache = compute_decryption_cache();
 
-    for deck_no in 0..5 {
+    for deck_no in 0..20 {
         // Actual protocol
-        let card_share_handles = shuffle_deck(&mut mpc).await;
-        println!("Generated a deck of {} cards", card_share_handles.len());
+        let mut _card_share_handles = shuffle_deck(&mut mpc).await;
+
+        while _card_share_handles.is_err() {
+            println!("failed to generate enough cards, trying again");
+            mpc.refresh();
+            _card_share_handles = shuffle_deck(&mut mpc).await;
+        }
+        let card_share_handles = _card_share_handles.unwrap();
+        #[cfg(feature = "print")]
+        println!(
+            "Generated a deck of {} cards after {} attempt(s)",
+            card_share_handles.len(),
+            mpc.attempt_count()
+        );
 
         let (perm_proof, alpha1) =
             compute_permutation_argument(&pp, &mut mpc, &card_share_handles).await;
@@ -267,7 +291,7 @@ async fn main() {
             );
         }
 
-        mpc = mpc.next().await;
+        mpc = mpc.next();
     }
     let _ = netd_handle.await.unwrap();
 }

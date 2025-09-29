@@ -14,14 +14,17 @@ use std::{
     vec,
 };
 
-use crate::common::{
-    Ciphertext, Curve, DeckProof, EncryptionInstance, EncryptionProof, Gt, PermutationProof,
-    SigmaProof, DECK_SIZE, F, G1, G2, NUM_SAMPLES, PERM_SIZE,
-};
-use crate::evaluator::Evaluator;
 use crate::hash::hash_to_g1;
 use crate::kzg::{UniversalParams, KZG10};
 use crate::utils;
+use crate::{
+    common::{
+        Ciphertext, Curve, DeckProof, EncryptionInstance, EncryptionProof, Gt, PermutationProof,
+        SigmaProof, DECK_SIZE, F, G1, G2, NUM_SAMPLES, PERM_SIZE,
+    },
+    error::PokerError,
+};
+use crate::{error::PokerResult, evaluator::Evaluator};
 
 type KZG = crate::kzg::KZG10<Curve, DensePolynomial<<Curve as Pairing>::ScalarField>>;
 
@@ -54,7 +57,7 @@ pub fn compute_decryption_cache() -> Vec<Gt> {
     cache
 }
 
-pub async fn shuffle_deck(evaluator: &mut Evaluator) -> Vec<String> {
+pub async fn shuffle_deck(evaluator: &mut Evaluator) -> PokerResult<Vec<String>> {
     //step 1: parties invoke F_RAN to obtain [sk]
     let sk = evaluator.ran();
 
@@ -106,13 +109,11 @@ pub async fn shuffle_deck(evaluator: &mut Evaluator) -> Vec<String> {
     }
 
     // Assert that the length is 64
-    assert_eq!(
-        card_share_handles.len(),
-        PERM_SIZE,
-        "We don't have enough cards - try again"
-    );
-
-    card_share_handles.clone()
+    if card_share_handles.len() != PERM_SIZE {
+        Err(PokerError::InsufficientCards)
+    } else {
+        Ok(card_share_handles)
+    }
 }
 
 pub async fn compute_permutation_argument(
