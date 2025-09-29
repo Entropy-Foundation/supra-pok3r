@@ -136,10 +136,6 @@ async fn main() {
         println!("\ncompleted.");
 
         mpc = mpc.next().await;
-
-        //this is a hack until we figure out
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        println!("After sleeping for 1 second.");
     }
     let _ = netd_handle.await.unwrap();
 }
@@ -272,10 +268,6 @@ async fn main() {
         }
 
         mpc = mpc.next().await;
-
-        //this is a hack until we figure out
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        println!("After sleeping for 1 second.");
     }
     let _ = netd_handle.await.unwrap();
 }
