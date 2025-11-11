@@ -921,7 +921,7 @@ impl Evaluator {
                 msg_mask_interleaved,
                 msg_share_handles
                     .iter()
-                    .map(|h| ("ibe_c2".to_owned() + h))
+                    .map(|h| "ibe_c2".to_owned() + h)
                     .collect::<Vec<String>>(),
             )
             .await;

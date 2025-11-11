@@ -1,54 +1,6 @@
-#![allow(unused_imports)]
-
 #[cfg(feature = "aws")]
-use aws_sdk_s3::Client;
-use libp2p::PeerId;
-use std::{
-    collections::{BTreeMap, HashMap},
-    fmt,
-    net::IpAddr,
-};
-
-#[cfg(feature = "aws")]
-use crate::aws::{read_ip_map_s3, read_pk_map_s3};
-
-#[cfg(feature = "aws")]
-pub async fn init_address_book_aws(client: &Client) -> Pok3rAddrBook {
-    use crate::aws::{list_files_shallow_s3, read_s3};
-    let mut pk_map = read_pk_map_s3(client).await;
-    let ip_map = read_ip_map_s3("/home/ec2-user/pok3r/private_ips.json")
-        .await
-        .expect("failed to load ip map");
-
-    //let my_id = get_instance_id().await.expect("failed to get instance id");
-
-    assert!(
-        pk_map.len() == ip_map.len(),
-        "pk_map id_match length mistmatch"
-    );
-
-    let mut out = BTreeMap::new();
-
-    let mut node_id = 1;
-    for (id, ip) in ip_map {
-        let pk = pk_map.remove(&id).expect("ip_map pk_map key mismatch");
-
-        let peer_id = PeerId::from_public_key(&pk.into()).to_base58();
-
-        out.insert(
-            peer_id.clone(),
-            Pok3rPeer {
-                peer_id,
-                node_id,
-                ip,
-            },
-        );
-
-        node_id += 1;
-    }
-
-    out
-}
+use std::net::IpAddr;
+use std::{collections::BTreeMap, fmt};
 
 pub const ADDRESSES: [&str; 32] = [
     "12D3KooWPjceQrSwdWXPyLLeABRXmuqt69Rg3sBYbU1Nft9HyQ6X",
@@ -198,7 +150,7 @@ pub fn parse_addr_book_from_json(num_parties: u64) -> Pok3rAddrBook {
         .map(|o| String::from(o.as_str().unwrap()))
         .collect();
 
-    let mut output: Pok3rAddrBook = HashMap::new();
+    let mut output: Pok3rAddrBook = BTreeMap::new();
     let mut counter = 1;
     for peer in &peers[0..num_parties as usize] {
         let pok3rpeer = Pok3rPeer {
@@ -234,10 +186,8 @@ impl fmt::Display for Pok3rPeer {
         write!(f, "({}, {})", self.node_id, self.peer_id)
     }
 }
-#[cfg(feature = "aws")]
+
 pub type Pok3rAddrBook = BTreeMap<Pok3rPeerId, Pok3rPeer>;
-#[cfg(not(feature = "aws"))]
-pub type Pok3rAddrBook = HashMap<Pok3rPeerId, Pok3rPeer>;
 
 pub fn get_node_id_via_peer_id(addr_book: &Pok3rAddrBook, peer_id: &Pok3rPeerId) -> Option<u64> {
     addr_book.get(peer_id).map(|p| p.node_id)

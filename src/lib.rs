@@ -1,6 +1,4 @@
 pub mod address_book;
-#[cfg(feature = "aws")]
-pub mod aws;
 pub mod card_id;
 pub mod common;
 pub mod ed25519;
