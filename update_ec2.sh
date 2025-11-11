@@ -26,7 +26,7 @@ echo "==> Shipping ${LOCAL_BIN} to ${#HOSTS[@]} hosts…"
 for host in "${HOSTS[@]}"; do
   (
     echo "-- ${host}: copying binary"
-    scp -o StrictHostKeyChecking=accept-new -i "${KEY}" "${LOCAL_BIN}" "${USER}@${host}":"${REMOTE_BIN}"
+    scp -O -o StrictHostKeyChecking=accept-new -i "${KEY}" "${LOCAL_BIN}" "${USER}@${host}":"${REMOTE_BIN}"
     echo "-- ${host}: done"
   ) &
 done

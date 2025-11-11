@@ -6,6 +6,8 @@ use aws_sdk_dynamodb::Client as ClientDb;
 use aws_sdk_ec2::Client as ClientEc2;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client as ClientS3;
+use aws_sdk_ssm::types::CommandInvocationStatus;
+use aws_sdk_ssm::Client as ClientSsm;
 use libp2p::identity::ed25519::PublicKey;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::IpAddr;
@@ -78,8 +80,23 @@ pub fn init_db_client(cfg: &SdkConfig) -> ClientDb {
     ClientDb::from_conf(db_cfg)
 }
 
+pub fn init_ssm_client(cfg: &SdkConfig) -> ClientSsm {
+    let ssm_cfg = aws_sdk_ssm::config::Builder::from(cfg)
+        .region(DB_REGION.clone())
+        .build();
+    ClientSsm::from_conf(ssm_cfg)
+}
+
 fn deck_file_name_aws(deck_no: u64) -> String {
     format!("test_key/deck_{deck_no}.bin")
+}
+async fn deck_file_name_aws_as_mpc(deck_no: u64) -> String {
+    let id = get_instance_id().await.expect("failed to get instance id");
+    format!("{}/test_key/deck_{}.bin", id, deck_no)
+}
+async fn deck_file_name_aws_as_mpc_dvrf(deck_no: u64) -> String {
+    let id = get_instance_id().await.expect("failed to get instance id");
+    format!("{}/dvrf_key/deck_{}.bin", id, deck_no)
 }
 
 pub async fn write_s3(client: &ClientS3, dir: &str, file: &str, contents: &[u8]) {
@@ -217,6 +234,40 @@ pub async fn save_deck_s3(client: &ClientS3, deck_no: u64, deck: Ciphertext, pro
     write_s3(client, dir, file.as_str(), &bytes).await;
 }
 
+pub async fn save_deck_s3_node(
+    client: &ClientS3,
+    deck_no: u64,
+    deck: Ciphertext,
+    proof: DeckProof,
+) {
+    let key = deck_file_name_aws_as_mpc(deck_no).await;
+    let bytes = serialize_deck_and_proof(deck, proof);
+
+    let id = get_instance_id().await.expect("failed to get instance id");
+    let dir = format!("{id}/test_key");
+    let file = format!("deck_{deck_no}.bin");
+    assert!(key.eq(&format!("{dir}/{file}")));
+
+    write_s3(client, &dir, &file, &bytes).await;
+}
+
+pub async fn save_deck_s3_node_dvrf(
+    client: &ClientS3,
+    deck_no: u64,
+    deck: Ciphertext,
+    proof: DeckProof,
+) {
+    let key = deck_file_name_aws_as_mpc_dvrf(deck_no).await;
+    let bytes = serialize_deck_and_proof(deck, proof);
+
+    let id = get_instance_id().await.expect("failed to get instance id");
+    let dir = format!("{id}/dvrf_key");
+    let file = format!("deck_{deck_no}.bin");
+    assert!(key.eq(&format!("{dir}/{file}")));
+
+    write_s3(client, &dir, &file, &bytes).await;
+}
+
 pub async fn read_deck_s3(
     client: &ClientS3,
     deck_no: u64,
@@ -227,6 +278,33 @@ pub async fn read_deck_s3(
     let file = format!("deck_{deck_no}.bin");
     assert!(key.eq(&format!("{dir}/{file}")));
     let bytes = read_s3(client, dir, file.as_str()).await?;
+
+    CanonicalDeserialize::deserialize_compressed(&*bytes)
+        .map_err(|e| format!("failed to deserialize deck and proof: {:?}", e))
+}
+
+pub async fn read_deck_s3_node(
+    client: &ClientS3,
+    deck_no: u64,
+    id: &str,
+) -> Result<(Ciphertext, DeckProof), String> {
+    let file = format!("deck_{deck_no}.bin");
+    let dir = format!("{}/test_key", id);
+
+    let bytes = read_s3(client, &dir, &file).await?;
+
+    CanonicalDeserialize::deserialize_compressed(&*bytes)
+        .map_err(|e| format!("failed to deserialize deck and proof: {:?}", e))
+}
+pub async fn read_deck_s3_node_dvrf(
+    client: &ClientS3,
+    deck_no: u64,
+    id: &str,
+) -> Result<(Ciphertext, DeckProof), String> {
+    let file = format!("deck_{deck_no}.bin");
+    let dir = format!("{}/dvrf_key", id);
+
+    let bytes = read_s3(client, &dir, &file).await?;
 
     CanonicalDeserialize::deserialize_compressed(&*bytes)
         .map_err(|e| format!("failed to deserialize deck and proof: {:?}", e))
@@ -263,7 +341,7 @@ pub async fn get_instance_id() -> anyhow::Result<String> {
 }
 
 pub async fn read_pk_map_s3(client: &ClientS3) -> BTreeMap<InstanceId, PublicKey> {
-    let dir = "address_book/ed25519/";
+    let dir = "address_book/ed25519";
     let keys = list_files_shallow_s3(client, dir)
         .await
         .expect("failed to get list of pks");
@@ -301,4 +379,144 @@ fn ip_map_from_str(txt: &str) -> anyhow::Result<BTreeMap<String, IpAddr>> {
         out.insert(iid, ip);
     }
     Ok(out)
+}
+
+pub async fn kick_workers_multi_range(
+    ssm: &ClientSsm,
+    starting_deck: u64,
+    num_decks: u64,
+) -> anyhow::Result<()> {
+    let cmd: String = format!("/home/ec2-user/pok3r/compute_n_decks_dvrf --starting-deck {starting_deck} --num-decks {num_decks}");
+    kick_workers_multi(ssm, cmd).await
+}
+
+pub async fn kick_workers_multi(ssm: &ClientSsm, cmd: String) -> anyhow::Result<()> {
+    let tag_key = "role";
+    let tag_val = "mpc-node";
+
+    let target = aws_sdk_ssm::types::Target::builder()
+        .key(format!("tag:{tag_key}"))
+        .values(tag_val)
+        .build();
+
+    // Self-verifying command: append + show file state
+    //let cmd = format!("bash /home/ec2-user/pok3r/compute_n_decks.sh {starting_deck} {num_decks}");
+    //let cmd: String = format!("/home/ec2-user/pok3r/compute_n_decks --starting-deck {starting_deck} --num-decks {num_decks}");
+
+    let resp = ssm
+        .send_command()
+        .document_name("AWS-RunShellScript")
+        .targets(target)
+        .parameters("commands", vec![cmd])
+        .parameters("executionTimeout", vec!["600".into()])
+        .send()
+        .await?;
+
+    let command_id = resp
+        .command()
+        .and_then(|c| c.command_id())
+        .ok_or_else(|| anyhow::anyhow!("No command_id returned"))?
+        .to_string();
+
+    //println!("Sent command. Command ID: {}", command_id);
+
+    // --- Wait for fan-out: TargetCount > 0 ---
+    let mut waited = 0u64;
+    let max_wait = 60u64;
+    let tick = 2u64;
+    let (mut target_count, mut completed, mut errors) = (0i32, 0i32, 0i32);
+
+    loop {
+        let lc = ssm.list_commands().command_id(&command_id).send().await?;
+
+        if let Some(cmd) = lc.commands().first() {
+            target_count = cmd.target_count();
+            completed = cmd.completed_count();
+            errors = cmd.error_count();
+            let status = cmd.status().map(|s| s.as_str()).expect("Unknown");
+            //println!("Command status: {status}, target_count={target_count}, completed={completed}, errors={errors}");
+        }
+
+        if target_count > 0 {
+            break;
+        }
+        if waited >= max_wait {
+            anyhow::bail!(
+                "SSM created command {}, but TargetCount stayed 0 for {}s (tag {}={}).",
+                command_id,
+                max_wait,
+                tag_key,
+                tag_val
+            );
+        }
+        tokio::time::sleep(tokio::time::Duration::from_secs(tick)).await;
+        waited += tick;
+    }
+
+    // --- Now poll invocations until all complete ---
+    loop {
+        let invs = ssm
+            .list_command_invocations()
+            .command_id(&command_id)
+            .details(true)
+            .send()
+            .await?
+            .command_invocations()
+            .to_vec();
+
+        if invs.is_empty() {
+            // We know target_count > 0, so give SSM a moment to surface per-instance records.
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            continue;
+        }
+
+        let mut all_done = true;
+        for inv in invs {
+            let iid = inv.instance_id().expect("unknown");
+            let status = inv.status().expect("unknown");
+            //println!("{} -> {:?}", iid, status);
+
+            /*
+            for p in inv.command_plugins() {
+                if let Some(out) = p.output() {
+                    if !out.is_empty() {
+                        println!("--- STDOUT [{}] ---\n{}", iid, out);
+                    }
+                }
+                // Note: standard_error_url is just a URL, not content.
+                if let Some(url) = p.standard_error_url() {
+                    if !url.is_empty() {
+                        println!("--- STDERR URL [{}] ---\n{}", iid, url);
+                    }
+                }
+            }
+            */
+            match status {
+                CommandInvocationStatus::Pending
+                | CommandInvocationStatus::InProgress
+                | CommandInvocationStatus::Delayed => {
+                    all_done = false;
+                }
+                CommandInvocationStatus::Cancelled
+                | CommandInvocationStatus::TimedOut
+                | CommandInvocationStatus::Failed
+                | CommandInvocationStatus::Cancelling => {
+                    anyhow::bail!("SSM command failed on {} with status {:?}", iid, status);
+                }
+                CommandInvocationStatus::Success => { /* ok */ }
+                _ => {
+                    all_done = false;
+                }
+            }
+        }
+
+        if all_done {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    }
+
+    //println!("All SSM command invocations finished.");
+
+    Ok(())
 }

@@ -12,6 +12,7 @@ rust-version = "1.63"
 ################################# Dependencies ################################
 
 [dependencies]
+subtle = "2.6.1"
 sha2 = "0.9"
 thiserror = "1.0.35"
 criterion = { version = "0.4.0", features = ["html_reports"] }
@@ -62,68 +63,52 @@ serde_json = { version = "*" }
 bs58 = { version = "*" }
 
 tokio = { version = "1.12.0", features = ["full"] }
-aws-config = { version = "1", optional = true }
-aws-sdk-s3 = { version = "1", optional = true }
-aws-sdk-ec2 = { version = "1", optional = true }
-aws-sdk-dynamodb = { version = "1", optional = true }
+aws-config = { version = "1.8.8", optional = true }
+aws-sdk-s3 = { version = "1.108", optional = true }
+aws-sdk-ec2 = { version = "1.175.1", optional = true }
+aws-sdk-dynamodb = { version = "1.95.0", optional = true }
+aws-sdk-ssm = { version = "1.97.0", optional = true }
 hex = "0.4.3"
 anyhow = "1"
 reqwest = { version = "0.11.11", default-features = false } #features = ["blocking", "json"]
 
 [features]
-default = ["bls12_381"]
+default = ["bls12_381", "aws"]
 
 asm = ["ark-ff/asm"]
 parallel = ["ark-std/parallel", "ark-ff/parallel", "ark-ec/parallel"]
 print = []
 bls12_381 = ["ark-bls12-381"]
 bls12_377 = ["ark-bls12-377"]
-aws = ["aws-config", "aws-sdk-s3", "aws-sdk-ec2", "aws-sdk-dynamodb"]
+aws = [
+    "aws-config",
+    "aws-sdk-s3",
+    "aws-sdk-ec2",
+    "aws-sdk-dynamodb",
+    "aws-sdk-ssm",
+]
 
 [profile.dev]
 opt-level = 3
+debuginfo = 1
+incremental = true
 
 [[bin]]
-name = "load_ip_map"
-path = "src/bin/load_ip_map.rs"
+name = "compute_n_decks"
+path = "src/bin/compute_n_decks.rs"
 required-features = ["aws"]
 
 [[bin]]
-name = "print_address_book"
-path = "src/bin/print_address_book.rs"
+name = "compute_n_decks_dvrf"
+path = "src/bin/compute_n_decks_dvrf.rs"
 required-features = ["aws"]
 
 [[bin]]
-name = "print_deck_dir"
-path = "src/bin/print_deck_dir.rs"
+name = "ping_mpc_nodes"
+path = "src/bin/ping_mpc_nodes.rs"
 required-features = ["aws"]
 
 [[bin]]
-name = "print_instance_id"
-path = "src/bin/print_instance_id.rs"
-required-features = ["aws"]
-
-[[bin]]
-name = "read_dynamo_db"
-path = "src/bin/read_dynamo_db.rs"
-required-features = ["aws"]
-
-[[bin]]
-name = "read_pk_dir"
-path = "src/bin/read_pk_dir.rs"
-required-features = ["aws"]
-
-[[bin]]
-name = "run_protocol"
-path = "src/bin/run_protocol.rs"
-required-features = ["aws"]
-
-[[bin]]
-name = "test_pk"
-path = "src/bin/test_pk.rs"
-required-features = ["aws"]
-
-[[bin]]
-name = "update_pk_bucket"
-path = "src/bin/update_pk_bucket.rs"
+name = "ping_mpc_nodes_args"
+path = "src/bin/ping_mpc_nodes_args.rs"
 required-features = ["aws"]
