@@ -56,7 +56,7 @@ impl CardId {
         if card_no >= 52 {
             return Err(String::from("must have 0 <= card_no <= 51"));
         }
-        let deck_no = u64::from_le_bytes(
+        let deck_no = u64::from_be_bytes(
             bytes[1..]
                 .try_into()
                 .expect("failed to parse bytes to CardId bad deck_no"),
@@ -67,7 +67,7 @@ impl CardId {
     pub fn to_bytes(&self) -> [u8; 9] {
         let mut out = [0; 9];
         out[0] = self.card_no;
-        out[1..].copy_from_slice(&self.deck_no.to_le_bytes());
+        out[1..].copy_from_slice(&self.deck_no.to_be_bytes());
         out
     }
 
