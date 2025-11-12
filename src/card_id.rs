@@ -67,7 +67,7 @@ impl CardId {
     pub fn to_bytes(&self) -> [u8; 9] {
         let mut out = [0; 9];
         out[0] = self.card_no;
-        out[1..].copy_from_slice(&self.deck_no.to_be_bytes());
+        out[1..].copy_from_slice(&self.deck_no.to_le_bytes());
         out
     }
 
