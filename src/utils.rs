@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use ark_crypto_primitives::crh::sha256::Sha256;
 use ark_ff::field_hashers::{DefaultFieldHasher, HashToField};
 use ark_ff::Field;

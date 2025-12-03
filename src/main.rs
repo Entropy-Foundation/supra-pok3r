@@ -1,8 +1,5 @@
-#[cfg(not(feature = "aws"))]
 use clap::Parser;
-#[cfg(not(feature = "aws"))]
 use pok3r::{
-    address_book::parse_addr_book_from_json,
     card_id::gen_ids,
     common::{DeckProof, EncryptionInstance, EvalNetMsg, DECK_SIZE, PERM_SIZE},
     evaluator::Evaluator,
@@ -12,11 +9,14 @@ use pok3r::{
         verify_deck_proof, verify_encryption_argument, verify_permutation_argument,
     },
 };
-#[cfg(not(feature = "aws"))]
 use tokio::sync::mpsc;
 
+#[cfg(not(feature = "mdns"))]
+use pok3r::address_book::generate_address_book_from_port;
+#[cfg(feature = "mdns")]
+use pok3r::address_book::parse_addr_book_from_json;
+
 /// Simple program to greet a person
-#[cfg(not(feature = "aws"))]
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -31,31 +31,44 @@ struct Args {
     /// number of parties doing the mpc
     #[clap(long)]
     parties: u64,
+
+    /// port used for parties to communicate (starting with [use base_port + seed_no])
+    #[clap(long, default_value_t = 3000)]
+    base_port: u16,
 }
 
 #[tokio::main]
-#[cfg(not(feature = "aws"))]
 async fn main() {
+    use pok3r::ed25519::generate_ed25519_from_seed;
+
     let args = Args::parse();
+    let parties = args.parties;
 
     //these channels will connect the evaluator and the network daemons
     let (mut n2e_tx, n2e_rx) = mpsc::unbounded_channel::<EvalNetMsg>();
     let (e2n_tx, e2n_rx) = mpsc::unbounded_channel::<EvalNetMsg>();
 
+    let sk = generate_ed25519_from_seed(args.seed);
+
     let netd_handle = tokio::spawn(async move {
-        let result = pok3r::network::run_networking_daemon(
-            args.seed,
-            &parse_addr_book_from_json(args.parties),
-            &mut n2e_tx,
-            e2n_rx,
-        )
-        .await;
+        // build addr_book inside the netd task
+        #[cfg(feature = "mdns")]
+        let addr_book = parse_addr_book_from_json(parties);
+        #[cfg(not(feature = "mdns"))]
+        let addr_book = generate_address_book_from_port(parties, args.base_port);
+
+        let result =
+            pok3r::network::run_networking_daemon(sk, &addr_book, &mut n2e_tx, e2n_rx).await;
         if let Err(err) = result {
             eprint!("Networking error {:?}", err);
         }
     });
 
-    let addr_book = parse_addr_book_from_json(args.parties);
+    #[cfg(feature = "mdns")]
+    let addr_book = parse_addr_book_from_json(parties);
+    #[cfg(not(feature = "mdns"))]
+    let addr_book = generate_address_book_from_port(parties, args.base_port);
+
     let messaging = pok3r::network::MessagingSystem::new(&args.id, addr_book, e2n_tx, n2e_rx).await;
     let mut mpc = Evaluator::new(messaging, 0);
 
@@ -154,7 +167,3 @@ async fn main() {
     }
     let _ = netd_handle.await.unwrap();
 }
-
-#[tokio::main]
-#[cfg(feature = "aws")]
-async fn main() {}

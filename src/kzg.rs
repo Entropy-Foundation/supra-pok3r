@@ -1,6 +1,4 @@
 //adapted from https://github.com/arkworks-rs/poly-commit/blob/master/src/kzg10/mod.rs
-#![allow(dead_code)]
-
 use ark_ec::{pairing::Pairing, AffineRepr, CurveGroup};
 use ark_ec::{scalar_mul::fixed_base::FixedBase, VariableBaseMSM};
 use ark_ff::{One, PrimeField, UniformRand, Zero};
@@ -128,6 +126,7 @@ where
     }
 }
 
+#[allow(dead_code)]
 fn skip_leading_zeros_and_convert_to_bigints<F: PrimeField, P: DenseUVPolynomial<F>>(
     p: &P,
 ) -> (usize, Vec<F::BigInt>) {

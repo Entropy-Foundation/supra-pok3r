@@ -75,7 +75,7 @@ parallel = ["ark-std/parallel", "ark-ff/parallel", "ark-ec/parallel"]
 print = []
 bls12_381 = ["ark-bls12-381"]
 bls12_377 = ["ark-bls12-377"]
-aws = []
+mdns = []
 
 [profile.dev]
 opt-level = 3

@@ -1,13 +1,11 @@
-#![allow(unused_imports)]
-
 use futures::future::Either;
 use libp2p::{
     core::{muxing::StreamMuxerBox, transport::OrTransport, upgrade},
     gossipsub,
     identity::{self},
-    mdns, noise,
+    noise,
     swarm::{NetworkBehaviour, SwarmEvent},
-    tcp, yamux, Multiaddr, PeerId, SwarmBuilder, Transport,
+    tcp, yamux, PeerId, SwarmBuilder, Transport,
 };
 use libp2p_quic as quic;
 use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
@@ -16,49 +14,44 @@ use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 use futures::StreamExt;
-use tokio::select; // use Tokio’s select!
-use tokio::sync::mpsc; // still needed for select_next_some()
-                       //use tokio_util::either::Either;
+use tokio::select;
+use tokio::sync::mpsc;
 
 use crate::{
     address_book::{get_node_id_via_peer_id, InstanceId, Pok3rAddrBook, Pok3rPeerId},
     common::EvalNetMsg,
-    ed25519::{generate_ed25519_from_seed, read_ed25519_keypair},
 };
+
+#[cfg(feature = "mdns")]
+use libp2p::mdns;
+#[cfg(not(feature = "mdns"))]
+use libp2p::Multiaddr;
 
 // We create a custom network behaviour that combines Gossipsub and Mdns.
 #[derive(NetworkBehaviour)]
 struct MyBehaviour {
     gossipsub: gossipsub::Behaviour,
-    #[cfg(not(feature = "aws"))]
+    #[cfg(feature = "mdns")]
     mdns: mdns::tokio::Behaviour,
 }
 
 pub async fn run_networking_daemon(
-    #[cfg(not(feature = "aws"))] secret_key_seed: u8,
+    id_keys: identity::Keypair,
     addr_book: &Pok3rAddrBook,
     tx: &mut mpsc::UnboundedSender<EvalNetMsg>,
     rx: mpsc::UnboundedReceiver<EvalNetMsg>,
 ) -> Result<(), Box<dyn Error>> {
-    #[cfg(not(feature = "aws"))]
-    let out = run_networking_daemon_with_kill(secret_key_seed, addr_book, tx, rx, None).await;
-    #[cfg(feature = "aws")]
-    let out = run_networking_daemon_with_kill(addr_book, tx, rx, None).await;
-
-    out
+    run_networking_daemon_with_kill(id_keys, addr_book, tx, rx, None).await
 }
 
-#[cfg(not(feature = "aws"))]
 pub async fn run_networking_daemon_with_kill(
-    secret_key_seed: u8,
+    id_keys: identity::Keypair,
     addr_book: &Pok3rAddrBook,
     tx: &mut mpsc::UnboundedSender<EvalNetMsg>,
     mut rx: mpsc::UnboundedReceiver<EvalNetMsg>,
     mut rx_kill: Option<mpsc::UnboundedReceiver<()>>,
 ) -> Result<(), Box<dyn Error>> {
-    // Create a random PeerId
-    //let id_keys = identity::Keypair::generate_ed25519();
-    let id_keys: identity::Keypair = generate_ed25519_from_seed(secret_key_seed);
+    // Create a random PeerId from secret key
     let local_peer_id = PeerId::from(id_keys.public());
     #[cfg(feature = "print")]
     println!("Local peer id: {local_peer_id}");
@@ -105,8 +98,13 @@ pub async fn run_networking_daemon_with_kill(
     gossipsub.subscribe(&topic)?;
 
     // Create a Swarm to manage peers and events
+    #[cfg(feature = "mdns")]
     let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_peer_id)?;
-    let behaviour = MyBehaviour { gossipsub, mdns };
+    let behaviour = MyBehaviour {
+        gossipsub,
+        #[cfg(feature = "mdns")]
+        mdns,
+    };
     let mut swarm: libp2p::Swarm<_> = SwarmBuilder::with_new_identity()
         .with_tokio()
         .with_other_transport(|_| transport)?
@@ -117,11 +115,46 @@ pub async fn run_networking_daemon_with_kill(
     //let mut stdin = io::BufReader::new(io::stdin()).lines().fuse();
 
     // Listen on all interfaces and whatever port the OS assigns
+    #[cfg(feature = "mdns")]
     swarm.listen_on("/ip4/0.0.0.0/udp/0/quic-v1".parse()?)?;
-    //swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
+    #[cfg(not(feature = "mdns"))]
+    let allowed = {
+        let local_peer_b58 = local_peer_id.to_base58();
+        let me = addr_book
+            .get(&local_peer_b58)
+            .expect("addr_book must contain this node's peer id");
 
-    let mut connected_peers: Vec<PeerId> = vec![];
+        // listen on *my* port
+        swarm.listen_on(format!("/ip4/0.0.0.0/udp/{}/quic-v1", me.port).parse()?)?;
+        // --- Allowlist from addr_book -------------------------------------------
+        let mut allowed: HashSet<PeerId> = HashSet::new();
+        for pid_b58 in addr_book.keys() {
+            let pid: PeerId = pid_b58.parse()?; // base58 -> PeerId
+            allowed.insert(pid);
+            // also tell gossipsub we want to treat them as explicit peers
+            swarm.behaviour_mut().gossipsub.add_explicit_peer(&pid);
+        }
+
+        let local_peer_b58 = local_peer_id.to_base58();
+
+        // --- Dial peers from addr_book (private IPs) -----------------------------
+        for (pid_b58, peer) in addr_book.iter() {
+            if *pid_b58 == local_peer_b58 {
+                continue; // don't dial self
+            }
+            let ma: Multiaddr = format!("/ip4/{}/udp/{}/quic-v1", peer.ip, peer.port).parse()?;
+            if let Err(e) = swarm.dial(ma) {
+                eprintln!("dial {} failed: {:?}", pid_b58, e);
+            }
+        }
+        allowed
+    };
+
+    let mut connected_peers: HashSet<PeerId> = HashSet::new();
     let mut connection_informed: bool = false;
+    #[cfg(not(feature = "mdns"))]
+    let target_count = addr_book.len().saturating_sub(1); // everyone except me
+
     // Kick it off
     let mut is_killed = false;
     while !is_killed {
@@ -158,6 +191,7 @@ pub async fn run_networking_daemon_with_kill(
             },
             //discovers peers, and notifies evaluator when all peers in addr_book are connected
             event = swarm.select_next_some() => match event {
+                #[cfg(feature = "mdns")]
                 SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                     for (peer_id, _multiaddr) in list {
                         #[cfg(feature = "print")]
@@ -166,7 +200,7 @@ pub async fn run_networking_daemon_with_kill(
                         swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
 
                         if addr_book.contains_key(&peer_id_encoded) {
-                            connected_peers.push(peer_id);
+                            connected_peers.insert(peer_id);
 
                             if !connection_informed &&
                                 (connected_peers.len() == addr_book.len() - 1) {
@@ -182,6 +216,7 @@ pub async fn run_networking_daemon_with_kill(
                     }
                 },
                 //handle peers that have dropped off unexpectedly
+                #[cfg(feature = "mdns")]
                 SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Expired(list))) => {
                     for (peer_id, _multiaddr) in list {
                         println!("mDNS discover peer has expired: {peer_id}");
@@ -201,154 +236,7 @@ pub async fn run_networking_daemon_with_kill(
                         eprint!("network error {:?}", err);
                     }
                 },
-                //prints out the address this program is listening on for new connections
-                #[allow(unused_variables)]
-                SwarmEvent::NewListenAddr { address, .. } => {
-                    #[cfg(feature = "print")]
-                    println!("Local node is listening on {address}");
-                }
-                _ => {}
-            }
-        }
-    }
-    Ok(())
-}
-
-#[cfg(feature = "aws")]
-pub async fn run_networking_daemon_with_kill(
-    addr_book: &Pok3rAddrBook,
-    tx: &mut mpsc::UnboundedSender<EvalNetMsg>,
-    mut rx: mpsc::UnboundedReceiver<EvalNetMsg>,
-    mut rx_kill: Option<mpsc::UnboundedReceiver<()>>,
-) -> Result<(), Box<dyn Error>> {
-    // Create a random PeerId
-    let id_keys: identity::Keypair =
-        read_ed25519_keypair("/home/ec2-user/pok3r/keypair".to_string())
-            .await
-            .expect("failed to read ed25519 keypair from file");
-    let local_peer_id = PeerId::from(id_keys.public());
-    let local_peer_b58 = local_peer_id.to_base58();
-    #[cfg(feature = "print")]
-    println!("Local peer id: {local_peer_id}");
-
-    // Set up an encrypted DNS-enabled TCP Transport over the yamux protocol.
-    let tcp_transport = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
-        .upgrade(upgrade::Version::V1Lazy)
-        .authenticate(noise::Config::new(&id_keys).expect("signing libp2p-noise static keypair"))
-        .multiplex(yamux::Config::default())
-        .timeout(Duration::from_secs(20))
-        .boxed();
-    let quic_transport = quic::tokio::Transport::new(quic::Config::new(&id_keys));
-    let transport = OrTransport::new(quic_transport, tcp_transport)
-        .map(|either_output, _| match either_output {
-            Either::Left((peer_id, muxer)) => (peer_id, StreamMuxerBox::new(muxer)),
-            Either::Right((peer_id, muxer)) => (peer_id, StreamMuxerBox::new(muxer)),
-        })
-        .boxed();
-
-    // To content-address message, we can take the hash of message and use it as an ID.
-    let message_id_fn = |message: &gossipsub::Message| {
-        let mut s = DefaultHasher::new();
-        message.data.hash(&mut s);
-        gossipsub::MessageId::from(s.finish().to_string())
-    };
-
-    // Set a custom gossipsub configuration
-    let gossipsub_config = gossipsub::ConfigBuilder::default()
-        .heartbeat_interval(Duration::from_secs(10)) // This is set to aid debugging by not cluttering the log space
-        .validation_mode(gossipsub::ValidationMode::Strict) // This sets the kind of message validation. The default is Strict (enforce message signing)
-        .message_id_fn(message_id_fn) // content-address messages. No two messages of the same content will be propagated.
-        .build()
-        .expect("Valid config");
-
-    // build a gossipsub network behaviour
-    let mut gossipsub = gossipsub::Behaviour::new(
-        gossipsub::MessageAuthenticity::Signed(id_keys.clone()),
-        gossipsub_config,
-    )
-    .expect("Correct configuration");
-    // Create a Gossipsub topic
-    let topic = gossipsub::IdentTopic::new("mpc-test-net");
-    // subscribes to our topic
-    gossipsub.subscribe(&topic)?;
-
-    // Create a Swarm to manage peers and events
-    let behaviour = MyBehaviour { gossipsub };
-    let mut swarm: libp2p::Swarm<_> = SwarmBuilder::with_existing_identity(id_keys.clone())
-        .with_tokio()
-        .with_other_transport(|_| transport)?
-        .with_behaviour(|_| behaviour)?
-        .build();
-
-    let quic_port: u16 = std::env::var("POK3R_QUIC_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(9000);
-    // Read full lines from stdin
-    //let mut stdin = io::BufReader::new(io::stdin()).lines().fuse();
-
-    // Listen on all interfaces and whatever port the OS assigns
-    swarm.listen_on(format!("/ip4/0.0.0.0/udp/{}/quic-v1", quic_port).parse()?)?;
-
-    // --- Allowlist from addr_book -------------------------------------------
-    let mut allowed: HashSet<PeerId> = HashSet::new();
-    for pid_b58 in addr_book.keys() {
-        let pid: PeerId = pid_b58.parse()?; // base58 -> PeerId
-        allowed.insert(pid);
-        // also tell gossipsub we want to treat them as explicit peers
-        swarm.behaviour_mut().gossipsub.add_explicit_peer(&pid);
-    }
-
-    // --- Dial peers from addr_book (private IPs) -----------------------------
-    for (pid_b58, peer) in addr_book.iter() {
-        if *pid_b58 == local_peer_b58 {
-            continue; // don't dial self
-        }
-        let ma: Multiaddr = format!("/ip4/{}/udp/{}/quic-v1", peer.ip, quic_port).parse()?;
-        if let Err(e) = swarm.dial(ma) {
-            eprintln!("dial {} failed: {:?}", pid_b58, e);
-        }
-    }
-    // --- Connection tracking -------------------------------------------------
-    let mut connected_peers: HashSet<PeerId> = HashSet::new();
-    let target_count = addr_book.len().saturating_sub(1); // everyone except me
-    let mut connection_informed: bool = false;
-    // Kick it off
-    let mut is_killed = false;
-    while !is_killed {
-        is_killed = match rx_kill.as_mut() {
-            Some(recv_kill) => {
-                if !recv_kill.is_empty() {
-                    match recv_kill.recv().await {
-                        Some(()) => {
-                            #[cfg(feature = "print")]
-                            println!("kill message received");
-                            true
-                        }
-                        None => {
-                            #[cfg(feature = "print")]
-                            println!("manager disconnected");
-                            true
-                        }
-                    }
-                } else {
-                    false
-                }
-            }
-            None => false,
-        };
-        select! {
-            //receives requests for publishing messages from the evaluator
-            msg_to_send = rx.recv() => {
-                let s = serde_json::to_string(&msg_to_send).unwrap();
-                if let Err(e) = swarm
-                    .behaviour_mut().gossipsub
-                    .publish(topic.clone(), <String as AsRef<[u8]>>::as_ref(&s)) {
-                    println!("Publish error: {e:?}");
-                }
-            },
-            //discovers peers, and notifies evaluator when all peers in addr_book are connected
-            event = swarm.select_next_some() => match event {
+                #[cfg(not(feature = "mdns"))]
                 SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                     // Enforce allowlist
                     if !allowed.contains(&peer_id) {
@@ -362,29 +250,11 @@ pub async fn run_networking_daemon_with_kill(
                         }
                     }
                 }
+                #[cfg(not(feature = "mdns"))]
                 SwarmEvent::ConnectionClosed { peer_id, .. } => {
                     connected_peers.remove(&peer_id);
                     // we may want to re-dial here
                 }
-                //all received messages over gossip channel are pushed to the evaluator
-                SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
-                    propagation_source: peer_id,
-                    message_id: _id,
-                    message,
-                })) => {
-                    // Enforce allowlist
-                    if !allowed.contains(&peer_id) {
-                        let _ = swarm.disconnect_peer_id(peer_id);
-                        continue;
-                    }
-
-                    let msg_as_str = String::from_utf8_lossy(&message.data);
-                    let deserialized_struct = serde_json::from_str(&msg_as_str).unwrap();
-                    let r = tx.send(deserialized_struct);
-                    if let Err(err) = r {
-                        eprint!("network error {:?}", err);
-                    }
-                },
                 //prints out the address this program is listening on for new connections
                 #[allow(unused_variables)]
                 SwarmEvent::NewListenAddr { address, .. } => {
@@ -495,12 +365,9 @@ impl MessagingSystem {
             let wait_res =
                 tokio::time::timeout(tokio::time::Duration::from_secs(peer_timeout), async {
                     loop {
-                        //loop over all incoming messages till we find msg from peer
-                        if self.mailbox.contains_key(identifier) {
-                            let sender_exists_for_handle =
-                                self.mailbox.get(identifier).unwrap().contains_key(&peer_id);
-                            //if we already have it, break out!
-                            if sender_exists_for_handle {
+                        // do we already have this sender's message for this identifier?
+                        if let Some(sender_map) = self.mailbox.get(identifier) {
+                            if sender_map.contains_key(&peer_id) {
                                 break;
                             }
                         }
@@ -512,10 +379,9 @@ impl MessagingSystem {
                 .await;
 
             if wait_res.is_err() {
-                return Err(format!("timed out on recv"));
+                return Err(format!("timed out on recv_from_all: {identifier}"));
             }
 
-            // if we got here, we can assume we have the message from peer_id
             let msg = self
                 .mailbox
                 .get(identifier)
@@ -534,7 +400,6 @@ impl MessagingSystem {
         Ok(messages)
     }
 
-    //returns the handle which
     fn process_next_message(&mut self, msg: &EvalNetMsg) {
         match msg {
             EvalNetMsg::PublishValue {
@@ -570,9 +435,8 @@ impl MessagingSystem {
         value: &String,
     ) {
         // if already exists, then ignore
-        if self.mailbox.contains_key(handle) {
-            let sender_exists_for_handle = self.mailbox.get(handle).unwrap().contains_key(sender);
-            if sender_exists_for_handle {
+        if let Some(mail) = self.mailbox.get(handle) {
+            if mail.contains_key(sender) {
                 return;
             } //ignore duplicate msg!
         } else {
@@ -587,7 +451,7 @@ impl MessagingSystem {
     }
 
     fn is_valid_sender(&self, sender_id: &Pok3rPeerId) -> bool {
-        // Only accept from known instance IDs (optionally also check signature against pubkey)
+        // Only accept from known instance IDs
         self.addr_book.contains_key(sender_id)
     }
 }

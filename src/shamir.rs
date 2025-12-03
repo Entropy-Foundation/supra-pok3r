@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use ark_poly::{univariate::DensePolynomial, Polynomial};
 use ark_std::UniformRand;
 use rand::Rng;

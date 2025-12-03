@@ -1,6 +1,7 @@
-#[cfg(feature = "aws")]
-use std::net::IpAddr;
 use std::{collections::BTreeMap, fmt};
+
+#[cfg(not(feature = "mdns"))]
+use std::net::{IpAddr, Ipv4Addr};
 
 pub const ADDRESSES: [&str; 32] = [
     "12D3KooWPjceQrSwdWXPyLLeABRXmuqt69Rg3sBYbU1Nft9HyQ6X",
@@ -103,7 +104,7 @@ Seed 62 peer id: 12D3KooWSK6f2ZJLRX8Q3LiuVnj9y3yXqJgFguJh7gdjtsSomnS8
 Seed 63 peer id: 12D3KooWHV2zfje5uXRV5nPsqArHdrVrh7GaAJVyhwr8ffZZ16om
 */
 
-#[cfg(not(feature = "aws"))]
+#[cfg(feature = "mdns")]
 pub fn parse_addr_book_from_json(num_parties: u64) -> Pok3rAddrBook {
     use serde_json::json;
 
@@ -165,6 +166,35 @@ pub fn parse_addr_book_from_json(num_parties: u64) -> Pok3rAddrBook {
     output
 }
 
+/// non-mdns local proof-of-concept:
+/// every peer lives at 127.0.0.1 with a distinct port
+#[cfg(not(feature = "mdns"))]
+pub fn generate_address_book_from_port(num_parties: u64, base_port: u16) -> Pok3rAddrBook {
+    let mut output: Pok3rAddrBook = BTreeMap::new();
+
+    for i in 0..num_parties as usize {
+        let peer_id = ADDRESSES[i].to_string();
+        let node_id = (i as u64) + 1;
+
+        // loopback IP
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+
+        // seed ~= node_id; port = base_port + seed
+        let port = base_port + ((i as u16) + 1);
+
+        let peer = Pok3rPeer {
+            peer_id: peer_id.clone(),
+            node_id,
+            ip,
+            port,
+        };
+
+        output.insert(peer_id, peer);
+    }
+
+    output
+}
+
 /// base58 encoding of ed25519 pub key
 pub type Pok3rPeerId = String;
 /// unique AWS instance id of each ec2 instance used during setup
@@ -174,11 +204,13 @@ pub type InstanceId = String;
 pub struct Pok3rPeer {
     // base58 encoding of ed25519 pub key
     pub peer_id: Pok3rPeerId,
-    // unique index between 1 and size of addr book (not used in SPDZ)
+    // unique index between 1 and size of addr book
     pub node_id: u64,
-    // private ip address
-    #[cfg(feature = "aws")]
+    // static IP and port used for QUIC when *not* using mdns
+    #[cfg(not(feature = "mdns"))]
     pub ip: IpAddr,
+    #[cfg(not(feature = "mdns"))]
+    pub port: u16,
 }
 
 impl fmt::Display for Pok3rPeer {
