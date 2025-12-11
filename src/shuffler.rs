@@ -518,6 +518,7 @@ pub async fn shuffle_and_encrypt(
     let mut _card_share_handles = shuffle_deck(mpc).await;
 
     while _card_share_handles.is_err() {
+        #[cfg(feature = "print")]
         println!("failed to generate enough cards, trying again");
         mpc.refresh();
         _card_share_handles = shuffle_deck(mpc).await;
