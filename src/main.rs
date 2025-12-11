@@ -6,7 +6,8 @@ use pok3r::{
     shuffler::{
         compute_decryption_cache, compute_decryption_key, compute_keyper_keys, compute_params,
         compute_permutation_argument, decrypt_one_card, encrypt_and_prove, shuffle_deck,
-        verify_deck_proof, verify_encryption_argument, verify_permutation_argument,
+        verify_combined_proof_with_instance, verify_encryption_argument_with_instance,
+        verify_permutation_argument,
     },
 };
 use tokio::sync::mpsc;
@@ -139,7 +140,7 @@ async fn main() {
             "Permutation argument verification failed"
         );
         assert!(
-            verify_encryption_argument(&pp, &ctxt, &encryption_proof, &instance),
+            verify_encryption_argument_with_instance(&pp, &ctxt, &encryption_proof, &instance),
             "Encryption proof verification failed"
         );
 
@@ -148,7 +149,7 @@ async fn main() {
             lec: encryption_proof,
         };
         assert!(
-            verify_deck_proof(&pp, &proof, &ctxt, &instance),
+            verify_combined_proof_with_instance(&pp, &proof, &ctxt, &instance),
             "Combined deck proof proof verification failed"
         );
 

@@ -510,6 +510,25 @@ pub async fn compute_permutation_argument(
     (permutation_argument, alpha1)
 }
 
+pub async fn shuffle_and_encrypt(
+    mpk: &G2,
+    pp: &UniversalParams<Curve>,
+    mpc: &mut Evaluator,
+) -> (Ciphertext, DeckProof) {
+    let card_share_handles = shuffle_deck(mpc).await.unwrap();
+    let (perm_proof, alpha1) = compute_permutation_argument(pp, mpc, &card_share_handles).await;
+    let (ctxt, lec_proof) =
+        encrypt_and_prove(pp, mpc, card_share_handles, alpha1, &mpk.clone()).await;
+
+    (
+        ctxt,
+        DeckProof {
+            perm: perm_proof,
+            lec: lec_proof,
+        },
+    )
+}
+
 pub fn verify_permutation_argument(
     pp: &UniversalParams<Curve>,
     perm_proof: &PermutationProof,
@@ -790,11 +809,29 @@ pub async fn encrypt_and_prove(
     (ctxt, encryption_proof)
 }
 
-pub fn verify_encryption_argument(
+pub fn verify_encryption_argument_with_instance(
     pp: &UniversalParams<Curve>,
     ctxt: &Ciphertext,
     proof: &EncryptionProof,
     instance: &EncryptionInstance,
+) -> bool {
+    verify_encryption_argument(
+        pp,
+        ctxt,
+        proof,
+        &instance.pk,
+        &instance.ids,
+        &instance.card_commitment,
+    )
+}
+
+pub fn verify_encryption_argument(
+    pp: &UniversalParams<Curve>,
+    ctxt: &Ciphertext,
+    proof: &EncryptionProof,
+    mpk: &G2,
+    ids: &Vec<Vec<u8>>,
+    card_commitment: &G1,
 ) -> bool {
     // Common first element of all ciphertexts
     let c1 = ctxt.0;
@@ -824,7 +861,7 @@ pub fn verify_encryption_argument(
     // Check evaluation proof
     if !KZG::verify_opening_proof(
         pp,
-        &instance.card_commitment.into_affine(),
+        &card_commitment.into_affine(),
         &delta,
         &proof.card_poly_eval,
         &proof.eval_proof.into_affine(),
@@ -841,14 +878,14 @@ pub fn verify_encryption_argument(
 
     let mut batch_h = G1::zero();
     for i in 0..PERM_SIZE {
-        let hash_id = hash_to_g1(instance.ids[i].as_ref());
+        let hash_id = hash_to_g1(ids[i].as_ref());
         batch_h = batch_h.add(hash_id.mul(lagrange_delta[i]));
     }
     // Add the contribution from the hiding term (multiplied with (delta^PERM_SIZE - 1))
     let hash_id = hash_to_g1(&BigUint::from(123_u64).to_bytes_le());
     batch_h = batch_h.add(hash_id.mul(utils::compute_power(&delta, PERM_SIZE as u64) - F::from(1)));
 
-    let e_batch = <Curve as Pairing>::pairing(batch_h, instance.pk);
+    let e_batch = <Curve as Pairing>::pairing(batch_h, mpk);
 
     // Check that prod_i c2_i^Li(delta) * alpha1_c2*(delta*PERM_SIZE - 1) = g^f(delta) * t
     let mut lhs = Gt::zero();
@@ -909,15 +946,26 @@ pub fn verify_encryption_argument(
     true
 }
 
-pub fn verify_deck_proof(
+pub fn verify_combined_proof_with_instance(
     pp: &UniversalParams<Curve>,
     proof: &DeckProof,
     ctxt: &Ciphertext,
     instance: &EncryptionInstance,
 ) -> bool {
-    verify_encryption_argument(pp, ctxt, &proof.lec, instance)
+    verify_encryption_argument_with_instance(pp, ctxt, &proof.lec, instance)
         && verify_permutation_argument(pp, &proof.perm)
         && instance.card_commitment.eq(&proof.perm.f_com)
+}
+
+pub fn verify_combined_proof(
+    pp: &UniversalParams<Curve>,
+    proof: &DeckProof,
+    ctxt: &Ciphertext,
+    mpk: &G2,
+    ids: &Vec<Vec<u8>>,
+) -> bool {
+    verify_encryption_argument(pp, ctxt, &proof.lec, mpk, ids, &proof.perm.f_com)
+        && verify_permutation_argument(pp, &proof.perm)
 }
 
 /// Estimating time to decrypt one card at game time
