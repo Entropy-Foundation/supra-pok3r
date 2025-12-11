@@ -14,8 +14,8 @@ use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 use futures::StreamExt;
-use tokio::select;
 use tokio::sync::mpsc;
+use tokio::{select, sync::mpsc::unbounded_channel};
 
 use crate::{
     address_book::{get_node_id_via_peer_id, InstanceId, Pok3rAddrBook, Pok3rPeerId},
@@ -41,7 +41,8 @@ pub async fn run_networking_daemon(
     tx: &mut mpsc::UnboundedSender<EvalNetMsg>,
     rx: mpsc::UnboundedReceiver<EvalNetMsg>,
 ) -> Result<(), Box<dyn Error>> {
-    run_networking_daemon_with_kill(id_keys, addr_book, tx, rx, None).await
+    let (_tx, _rx) = unbounded_channel();
+    run_networking_daemon_with_kill(id_keys, addr_book, tx, rx, _rx).await
 }
 
 pub async fn run_networking_daemon_with_kill(
@@ -49,7 +50,7 @@ pub async fn run_networking_daemon_with_kill(
     addr_book: &Pok3rAddrBook,
     tx: &mut mpsc::UnboundedSender<EvalNetMsg>,
     mut rx: mpsc::UnboundedReceiver<EvalNetMsg>,
-    mut rx_kill: Option<mpsc::UnboundedReceiver<()>>,
+    mut rx_kill: mpsc::UnboundedReceiver<()>,
 ) -> Result<(), Box<dyn Error>> {
     // Create a random PeerId from secret key
     let local_peer_id = PeerId::from(id_keys.public());
@@ -155,31 +156,12 @@ pub async fn run_networking_daemon_with_kill(
     #[cfg(not(feature = "mdns"))]
     let target_count = addr_book.len().saturating_sub(1); // everyone except me
 
-    // Kick it off
-    let mut is_killed = false;
-    while !is_killed {
-        is_killed = match rx_kill.as_mut() {
-            Some(recv_kill) => {
-                if !recv_kill.is_empty() {
-                    match recv_kill.recv().await {
-                        Some(()) => {
-                            #[cfg(feature = "print")]
-                            println!("kill message received");
-                            true
-                        }
-                        None => {
-                            #[cfg(feature = "print")]
-                            println!("manager disconnected");
-                            true
-                        }
-                    }
-                } else {
-                    false
-                }
-            }
-            None => false,
-        };
+    loop {
         select! {
+            _ = rx_kill.recv() => {
+                // optionally print based on what is received
+                break;
+            }
             //receives requests for publishing messages from the evaluator
             msg_to_send = rx.recv() => {
                 let s = serde_json::to_string(&msg_to_send).unwrap();
