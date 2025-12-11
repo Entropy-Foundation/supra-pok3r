@@ -515,7 +515,21 @@ pub async fn shuffle_and_encrypt(
     pp: &UniversalParams<Curve>,
     mpc: &mut Evaluator,
 ) -> (Ciphertext, DeckProof) {
-    let card_share_handles = shuffle_deck(mpc).await.unwrap();
+    let mut _card_share_handles = shuffle_deck(mpc).await;
+
+    while _card_share_handles.is_err() {
+        println!("failed to generate enough cards, trying again");
+        mpc.refresh();
+        _card_share_handles = shuffle_deck(mpc).await;
+    }
+    let card_share_handles = _card_share_handles.unwrap();
+    #[cfg(feature = "print")]
+    println!(
+        "Generated a deck of {} cards after {} attempt(s)",
+        card_share_handles.len(),
+        mpc.attempt_count()
+    );
+
     let (perm_proof, alpha1) = compute_permutation_argument(pp, mpc, &card_share_handles).await;
     let (ctxt, lec_proof) =
         encrypt_and_prove(pp, mpc, card_share_handles, alpha1, &mpk.clone()).await;
